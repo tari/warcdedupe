@@ -12,6 +12,7 @@ libc = "0.2.36"
 libflate = "0.1.14"
 log = "0.4.1"
 regex = "0.2.10"
+twoway = "0.1.7"
 
 [dev-dependencies]
 criterion = "0.2.1"

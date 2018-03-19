@@ -41,6 +41,7 @@ extern crate libflate;
 #[macro_use]
 extern crate log;
 extern crate regex;
+extern crate twoway;
 
 use failure::Error;
 use std::io::BufRead;
@@ -220,12 +221,7 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Error> {
     /// Return the index of the first position in the given buffer following
     /// a b"\r\n\r\n" sequence.
     fn find_crlf2(buf: &[u8]) -> Option<usize> {
-        for (i, window) in buf.windows(4).enumerate() {
-            if window == b"\r\n\r\n" {
-                return Some(i + 4);
-            }
-        }
-        None
+        twoway::find_bytes(buf, b"\r\n\r\n").map(|i| i + 4)
     }
 
     // Read bytes out of the input reader until we find the end of the header

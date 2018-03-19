@@ -25,4 +25,3 @@ fn can_read_multi_record_gzip() {
         assert_eq!(&buf, message);
     }
 }
-
