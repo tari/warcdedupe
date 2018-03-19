@@ -9,8 +9,7 @@ criterion_main!(benches);
 criterion_group!(benches, bench_get_record_header);
 
 fn bench_get_record_header(c: &mut Criterion) {
-    const DATA: &[u8] =
-        b"WARC/1.0\r\n\
+    const DATA: &[u8] = b"WARC/1.0\r\n\
           WARC-Type: warcinfo\r\n\
           Content-Type: application/warc-fields\r\n\
           WARC-Date: 2018-01-28T09:13:46Z\r\n\
@@ -27,7 +26,6 @@ fn bench_get_record_header(c: &mut Criterion) {
            \"--load-cookies\" \"cookies.txt\" \"--delete-after\" \"-i\" \"-\"\
           \r\n";
 
-    c.bench_function("parse warcinfo", |b|
-                     b.iter(|| get_record_header(DATA).expect("invalid data?!")));
+    c.bench_function("parse warcinfo",
+                     |b| b.iter(|| get_record_header(DATA).expect("invalid data?!")));
 }
-
