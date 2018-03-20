@@ -2,6 +2,19 @@
 name = "warcdedupe"
 version = "0.1.0"
 authors = ["Peter Marheine <peter@taricorp.net>"]
+description = "A tool for deduplicating WARC files"
+repository = "https://bitbucket.org/tari/warcdedupe"
+readme = "README.md"
+
+license = "BSD-3-Clause"
+license-file = "LICENSE"
+
+categories = ["command-line-utilities", "science"]
+keywords = ["warc", "revisit", "deduplicate"]
+
+[badges]
+travis-ci = { repository = "tari/warcdedupe" }
+maintenance = { status = "experimental" }
 
 [dependencies]
 errno = "0.2.3"
