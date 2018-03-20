@@ -1,6 +1,6 @@
 //! Grammar per ISO-28500:2016 (WARC 1.1):
 //!
-//! ```ignore
+//! ```text
 //! warc-file   = 1*warc-record
 //! warc-record = header CRLF
 //!               block CRLF CRLF
