@@ -5,18 +5,19 @@ authors = ["Peter Marheine <peter@taricorp.net>"]
 description = "A tool for deduplicating WARC files"
 repository = "https://bitbucket.org/tari/warcdedupe"
 readme = "README.md"
-
 license = "BSD-3-Clause"
-license-file = "LICENSE"
 
 categories = ["command-line-utilities", "science"]
 keywords = ["warc", "revisit", "deduplicate"]
 
-[badges]
-travis-ci = { repository = "tari/warcdedupe" }
-maintenance = { status = "experimental" }
+[lib]
+name = "warcio"
+
+[profile.release]
+lto = true
 
 [dependencies]
+docopt = "0.8.3"
 errno = "0.2.3"
 httparse = "1.2.4"
 failure = "0.1.1"
@@ -25,6 +26,8 @@ libc = "0.2.36"
 libflate = "0.1.14"
 log = "0.4.1"
 regex = "0.2.10"
+serde = "1.0.33"
+serde_derive = "1.0.33"
 twoway = "0.1.7"
 
 [dev-dependencies]
@@ -33,3 +36,8 @@ criterion = "0.2.1"
 [[bench]]
 name = "parser"
 harness = false
+
+[badges]
+travis-ci = { repository = "tari/warcdedupe" }
+maintenance = { status = "experimental" }
+

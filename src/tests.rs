@@ -1,27 +1,107 @@
+use super::*;
 
-/// Verify that it's possible to read multi-record gzip files (like a
-/// .warc.gz).
 #[test]
-fn can_read_multi_record_gzip() {
-    use libflate::finish::Complete;
-    use libflate::gzip;
-    use std::io::{self, Read, Seek, SeekFrom, Write};
+fn can_read_record_header() {
+    let header = b"WARC/1.0\r\n\
+                   Warc-Type: testdata\r\n\
+                   Content-Length: 6\r\n\
+                   X-Multiline-Test:lol \r\n  multiline headers\r\n\
+                   \r\n";
 
-    const MESSAGES: &[&'static [u8]] = &[b"Hello, world!", b"This is the second message."];
+    fn field(name: &str, value: &[u8]) -> Field {
+        Field::new(name, value.to_owned())
+    }
+    assert_eq!(get_record_header(&header[..]).expect("Should be valid"),
+               Header {
+                   version: Version {
+                       major: 1,
+                       minor: 0,
+                   },
+                   fields: vec![field("Warc-Type", b"testdata"),
+                                field("Content-Length", b"6"),
+                                field("X-Multiline-Test", b"lol multiline headers")],
+               });
+}
 
-    let compressed: Vec<u8> = vec![];
-    let mut cursor = io::Cursor::new(compressed);
-    for message in MESSAGES {
-        let mut encoder = gzip::Encoder::new(&mut cursor).unwrap();
-        encoder.write_all(message).unwrap();
-        encoder.complete().unwrap();
+#[test]
+fn extra_buffering_works() {
+    use std::io::{self, Result};
+    /// A type to probe the buffering behavior of `get_record_header`.
+    ///
+    /// On each `fill_buf` call it transitions to the next state, and
+    /// after two it is in the terminal state.
+    #[derive(Debug, PartialEq)]
+    enum DoubleBuffer<'a> {
+        /// Nothing read yet.
+        Start(&'a [u8], &'a [u8]),
+        /// One whole buffer read.
+        Second(&'a [u8]),
+        /// Both buffers read, with n bytes read from the second.
+        Done(usize),
+    }
+    // Only because BufRead: Read
+    impl<'a> io::Read for DoubleBuffer<'a> {
+        fn read(&mut self, _: &mut [u8]) -> Result<usize> {
+            unimplemented!();
+        }
+    }
+    impl<'a> BufRead for DoubleBuffer<'a> {
+        fn fill_buf(&mut self) -> Result<&[u8]> {
+            eprintln!("fill_buf {:?}", self);
+            match self {
+                &mut DoubleBuffer::Start(fst, _) => Ok(fst),
+                &mut DoubleBuffer::Second(snd) => Ok(snd),
+                &mut DoubleBuffer::Done(_) => panic!("Should not fill after snd"),
+            }
+        }
+
+        fn consume(&mut self, amt: usize) {
+            eprintln!("consume {} {:?}", amt, self);
+            let next = match *self {
+                DoubleBuffer::Start(fst, snd) => {
+                    assert_eq!(amt, fst.len());
+                    DoubleBuffer::Second(snd)
+                }
+                DoubleBuffer::Second(snd) => DoubleBuffer::Done(snd.len() - amt),
+                DoubleBuffer::Done(_) => panic!("Should not consume after snd"),
+            };
+            *self = next;
+        }
     }
 
-    cursor.seek(SeekFrom::Start(0)).unwrap();
-    for message in MESSAGES.iter() {
-        let mut decoder = gzip::Decoder::new(&mut cursor).unwrap();
-        let mut buf: Vec<u8> = vec![];
-        decoder.read_to_end(&mut buf).unwrap();
-        assert_eq!(&buf, message);
-    }
+    let mut reader = DoubleBuffer::Start(b"WARC/1.0\r\n\
+                                           X-First-Header: yes\r\n",
+                                         b"X-Second-Header:yes\r\n\
+                                           \r\n\
+                                           IGNORED_DATA");
+    get_record_header(&mut reader).expect("failed to parse valid header");
+    assert_eq!(reader, DoubleBuffer::Done(12));
+}
+
+#[test]
+fn incorrect_signature_is_invalid() {
+    assert_eq!(Version::parse(b"\x89PNG\r\n\x1a\n"),
+               Err(ParseError::InvalidSignature));
+    assert_eq!(Version::parse(b"WARC/1.0a\r\n"),
+               Err(ParseError::InvalidSignature));
+}
+
+#[test]
+fn truncated_header_is_invalid() {
+    use std::io;
+    const BYTES: &[u8] = b"WARC/1.1\r\n
+                           Warc-Type: testdata\r\n\r";
+
+    assert_eq!(get_record_header(BYTES),
+               Err(ParseError::IoError(io::Error::new(io::ErrorKind::UnexpectedEof,
+                                                      "WARC header not terminated"))));
+}
+
+#[test]
+fn invalid_fields_are_invalid() {
+    assert_eq!(Field::parse(b"This is not a valid field"),
+               Err(ParseError::MalformedField));
+
+    assert_eq!(Field::parse(b"X-Invalid-UTF-8\xFF: yes"),
+               Err(ParseError::MalformedField));
 }

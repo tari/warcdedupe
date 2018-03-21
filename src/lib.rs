@@ -31,6 +31,7 @@
 //! quoted-pair = "\" CHAR
 //! uri = <'URI' per RFC3986>
 //! ```
+#![deny(missing_docs)]
 
 extern crate errno;
 extern crate failure;
@@ -43,36 +44,69 @@ extern crate log;
 extern crate regex;
 extern crate twoway;
 
-use failure::Error;
 use std::io::BufRead;
 use std::str::{self, FromStr};
 use regex::bytes::Regex;
 
 //mod copy;
 //mod file;
+/// Reading WARC records from files or streams.
+pub mod reader;
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, PartialEq)]
-pub enum InvalidHeader {
+/// Reasons it may be impossible to parse a WARC header.
+#[derive(Debug)]
+pub enum ParseError {
     /// The WARC/m.n signature is not present or invalid.
     InvalidSignature,
     /// A header field was malformed or truncated.
     MalformedField,
+    /// An I/O error occured while trying to read the input.
+    IoError(std::io::Error),
 }
 
-impl std::fmt::Display for InvalidHeader {
+impl std::cmp::PartialEq for ParseError {
+    fn eq(&self, other: &Self) -> bool {
+        use std::error::Error;
+        use ParseError::*;
+
+        match (self, other) {
+            (&InvalidSignature, &InvalidSignature) |
+            (&MalformedField, &MalformedField) => true,
+            (&IoError(ref e1), &IoError(ref e2)) => {
+                e1.kind() == e2.kind() && e1.description() == e2.description()
+            }
+            (_, _) => false,
+        }
+    }
+}
+
+impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        unimplemented!();
+        use std::error::Error;
+        write!(f, "Invalid WARC header: {}", self.description())
     }
 }
 
-impl std::error::Error for InvalidHeader {
+impl std::error::Error for ParseError {
     fn description(&self) -> &str {
-        unimplemented!();
+        use ParseError::*;
+        match *self {
+            InvalidSignature => "WARC signature is missing or invalid",
+            MalformedField => "Header field is malformed or truncated",
+            IoError(_) => "I/O error",
+        }
     }
 }
 
+impl From<std::io::Error> for ParseError {
+    fn from(e: std::io::Error) -> ParseError {
+        ParseError::IoError(e)
+    }
+}
+
+/// The header of a WARC record.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Header {
     version: Version,
@@ -81,7 +115,7 @@ pub struct Header {
 
 impl Header {
     /// Parse a header from bytes, returning the header and the number of bytes consumed.
-    pub fn parse(mut bytes: &[u8]) -> Result<Header, InvalidHeader> {
+    pub fn parse(mut bytes: &[u8]) -> Result<Header, ParseError> {
         // version, fields, CRLF
         let (mut bytes_consumed, version) = Version::parse(bytes)?;
         bytes = &bytes[bytes_consumed..];
@@ -111,27 +145,33 @@ impl Header {
 /// with newer versions).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Version {
+    /// The integer part of the version number.
+    ///
+    /// In '12.345', this is 12.
     pub major: u32,
+    /// The fractional part of the version number.
+    ///
+    /// In '12.345', this is 345.
     pub minor: u32,
 }
 
 impl Version {
     /// Parse the version line from a record header, returning the number of bytes
     /// consumed and the version.
-    pub fn parse(bytes: &[u8]) -> Result<(usize, Version), InvalidHeader> {
+    pub fn parse(bytes: &[u8]) -> Result<(usize, Version), ParseError> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^WARC/(\d+)\.(\d+)\r\n")
                 .expect("Version regex invalid");
         }
-        fn bytes_to_u32(bytes: &[u8]) -> Result<u32, InvalidHeader> {
+        fn bytes_to_u32(bytes: &[u8]) -> Result<u32, ParseError> {
             match str::from_utf8(bytes).map(u32::from_str) {
                 Ok(Ok(x)) => Ok(x),
-                Err(_) | Ok(Err(_)) => Err(InvalidHeader::InvalidSignature),
+                Err(_) | Ok(Err(_)) => Err(ParseError::InvalidSignature),
             }
         }
 
         match RE.captures(bytes) {
-            None => Err(InvalidHeader::InvalidSignature),
+            None => Err(ParseError::InvalidSignature),
             Some(m) => {
                 let version = Version {
                     major: bytes_to_u32(&m[1])?,
@@ -181,7 +221,7 @@ impl Field {
     /// Parse a Field from bytes.
     ///
     /// Returns the number of bytes consumed and the parsed field on succes.
-    pub fn parse(bytes: &[u8]) -> Result<(usize, Field), InvalidHeader> {
+    pub fn parse(bytes: &[u8]) -> Result<(usize, Field), ParseError> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^([a-zA-Z_\-]+): *(.*?)\r\n")
                 .expect("Field regex invalid");
@@ -192,7 +232,7 @@ impl Field {
         let m = match RE.captures(bytes) {
             None => {
                 debug!("Header regex did not match");
-                return Err(InvalidHeader::MalformedField);
+                return Err(ParseError::MalformedField);
             }
             Some(c) => c,
         };
@@ -217,7 +257,12 @@ impl Field {
     }
 }
 
-pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Error> {
+/// Parse a WARC record header out of the provided `BufRead`.
+///
+/// Consumes the bytes that are parsed, leaving the reader at the beginning
+/// of the record payload. In case of an error in parsing some or all of the
+/// input may be consumed.
+pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError> {
     /// Return the index of the first position in the given buffer following
     /// a b"\r\n\r\n" sequence.
     fn find_crlf2(buf: &[u8]) -> Option<usize> {
@@ -273,120 +318,5 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Error> {
         reader.consume(buf.len() - bytes_consumed);
         bytes_consumed = buf.len();
         // TODO enforce maximum vec size?
-    }
-}
-
-#[cfg(test)]
-mod parser_tests {
-    use super::*;
-
-    #[test]
-    fn can_read_record_header() {
-        let header = b"WARC/1.0\r\n\
-                       Warc-Type: testdata\r\n\
-                       Content-Length: 6\r\n\
-                       X-Multiline-Test:lol \r\n  multiline headers\r\n\
-                       \r\n";
-
-        fn field(name: &str, value: &[u8]) -> Field {
-            Field::new(name, value.to_owned())
-        }
-        assert_eq!(get_record_header(&header[..]).expect("Should be valid"),
-                   Header {
-                       version: Version {
-                           major: 1,
-                           minor: 0,
-                       },
-                       fields: vec![field("Warc-Type", b"testdata"),
-                                    field("Content-Length", b"6"),
-                                    field("X-Multiline-Test", b"lol multiline headers")],
-                   });
-    }
-
-    #[test]
-    fn extra_buffering_works() {
-        use std::io::{self, Result};
-        /// A type to probe the buffering behavior of `get_record_header`.
-        ///
-        /// On each `fill_buf` call it transitions to the next state, and
-        /// after two it is in the terminal state.
-        #[derive(Debug, PartialEq)]
-        enum DoubleBuffer<'a> {
-            /// Nothing read yet.
-            Start(&'a [u8], &'a [u8]),
-            /// One whole buffer read.
-            Second(&'a [u8]),
-            /// Both buffers read, with n bytes read from the second.
-            Done(usize),
-        }
-        // Only because BufRead: Read
-        impl<'a> io::Read for DoubleBuffer<'a> {
-            fn read(&mut self, _: &mut [u8]) -> Result<usize> {
-                unimplemented!();
-            }
-        }
-        impl<'a> BufRead for DoubleBuffer<'a> {
-            fn fill_buf(&mut self) -> Result<&[u8]> {
-                eprintln!("fill_buf {:?}", self);
-                match self {
-                    &mut DoubleBuffer::Start(fst, _) => Ok(fst),
-                    &mut DoubleBuffer::Second(snd) => Ok(snd),
-                    &mut DoubleBuffer::Done(_) => panic!("Should not fill after snd"),
-                }
-            }
-
-            fn consume(&mut self, amt: usize) {
-                eprintln!("consume {} {:?}", amt, self);
-                let next = match *self {
-                    DoubleBuffer::Start(fst, snd) => {
-                        assert_eq!(amt, fst.len());
-                        DoubleBuffer::Second(snd)
-                    }
-                    DoubleBuffer::Second(snd) => DoubleBuffer::Done(snd.len() - amt),
-                    DoubleBuffer::Done(_) => panic!("Should not consume after snd"),
-                };
-                *self = next;
-            }
-        }
-
-        let mut reader = DoubleBuffer::Start(b"WARC/1.0\r\n\
-                                               X-First-Header: yes\r\n",
-                                             b"X-Second-Header:yes\r\n\
-                                               \r\n\
-                                               IGNORED_DATA");
-        get_record_header(&mut reader).expect("failed to parse valid header");
-        assert_eq!(reader, DoubleBuffer::Done(12));
-    }
-
-    #[test]
-    fn incorrect_signature_is_invalid() {
-        assert_eq!(Version::parse(b"\x89PNG\r\n\x1a\n"),
-                   Err(InvalidHeader::InvalidSignature));
-        assert_eq!(Version::parse(b"WARC/1.0a\r\n"),
-                   Err(InvalidHeader::InvalidSignature));
-    }
-
-    #[test]
-    fn truncated_header_is_invalid() {
-        use std::error::Error;
-        const BYTES: &[u8] = b"WARC/1.1\r\n
-                               Warc-Type: testdata\r\n\r";
-
-        let err = get_record_header(BYTES)
-            .expect_err("Record parsing should fail")
-            .downcast::<std::io::Error>()
-            .expect("should be IoError");
-
-        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
-        assert_eq!(err.description(), "WARC header not terminated");
-    }
-
-    #[test]
-    fn invalid_fields_are_invalid() {
-        assert_eq!(Field::parse(b"This is not a valid field"),
-                   Err(InvalidHeader::MalformedField));
-
-        assert_eq!(Field::parse(b"X-Invalid-UTF-8\xFF: yes"),
-                   Err(InvalidHeader::MalformedField));
     }
 }
