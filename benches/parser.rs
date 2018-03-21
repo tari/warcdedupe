@@ -1,9 +1,9 @@
 #[macro_use]
 extern crate criterion;
-extern crate warcdedupe;
+extern crate warcio;
 
 use criterion::Criterion;
-use warcdedupe::get_record_header;
+use warcio::get_record_header;
 
 criterion_main!(benches);
 criterion_group!(benches, bench_get_record_header);
