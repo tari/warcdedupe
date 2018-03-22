@@ -301,18 +301,27 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError
         // Copy out of the reader
         buf.extend(reader.fill_buf()?);
         if buf.len() == bytes_consumed {
+            // Read returned 0 bytes
             return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof,
                                            "WARC header not terminated")
                                .into());
         }
 
-        if let Some(i) = find_crlf2(&buf) {
+        // Only search new data; start from the earliest possible location
+        // a crlf2 could appear if it spans the boundary between buffers.
+        let start_search = if bytes_consumed > 3 {
+            bytes_consumed - 3
+        } else {
+            0
+        };
+        if let Some(i) = find_crlf2(&buf[start_search..]) {
             // If we hit, consume up to the hit and done.
             // Our buffer is larger than the reader's: be careful only to
             // consume what the reader gave us most recently, which we haven't
             // taken ownership of yet.
-            reader.consume(i - bytes_consumed);
-            return Ok(Header::parse(&buf[..i])?);
+            let match_idx = start_search + i;
+            reader.consume(match_idx - bytes_consumed);
+            return Ok(Header::parse(&buf[..match_idx])?);
         }
 
         // Otherwise keep looking
