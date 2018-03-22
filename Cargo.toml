@@ -16,6 +16,9 @@ name = "warcio"
 [profile.release]
 lto = true
 
+[profile.bench]
+lto = true
+
 [dependencies]
 docopt = "0.8.3"
 errno = "0.2.3"
