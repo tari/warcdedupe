@@ -70,10 +70,12 @@ fn extra_buffering_works() {
     }
 
     let mut reader = DoubleBuffer::Start(b"WARC/1.0\r\n\
-                                           X-First-Header: yes\r\n",
-                                         b"X-Second-Header:yes\r\n\
-                                           \r\n\
-                                           IGNORED_DATA");
+                                           X-First-Header: yes\r\n\
+                                           X-Second-Header:yes\r\n\
+                                           \r",
+                                         // Header termination spans two buffers
+                                         // to catch potential errors there.
+                                         b"\nIGNORED_DATA");
     get_record_header(&mut reader).expect("failed to parse valid header");
     assert_eq!(reader, DoubleBuffer::Done(12));
 }
