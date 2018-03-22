@@ -17,6 +17,7 @@ criterion_group!{
 fn get_record_header_windows<R: BufRead>(mut reader: R) -> Result<Header, ParseError> {
     /// Return the index of the first position in the given buffer following
     /// a b"\r\n\r\n" sequence.
+    #[inline]
     fn find_crlf2(buf: &[u8]) -> Option<usize> {
         for (i, window) in buf.windows(4).enumerate() {
             if window == b"\r\n\r\n" {

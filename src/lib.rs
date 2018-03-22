@@ -265,6 +265,7 @@ impl Field {
 pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError> {
     /// Return the index of the first position in the given buffer following
     /// a b"\r\n\r\n" sequence.
+    #[inline]
     fn find_crlf2(buf: &[u8]) -> Option<usize> {
         twoway::find_bytes(buf, b"\r\n\r\n").map(|i| i + 4)
     }
