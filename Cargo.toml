@@ -13,13 +13,11 @@ keywords = ["warc", "revisit", "deduplicate"]
 [lib]
 name = "warcio"
 
-[profile.release]
-lto = true
-
-[profile.bench]
-lto = true
+[features]
+default = ["chrono"]
 
 [dependencies]
+chrono = { version = "0.4.0", optional = true }
 docopt = "0.8.3"
 errno = "0.2.3"
 httparse = "1.2.4"
@@ -43,4 +41,10 @@ harness = false
 [badges]
 travis-ci = { repository = "tari/warcdedupe" }
 maintenance = { status = "experimental" }
+
+[profile.release]
+lto = true
+
+[profile.bench]
+lto = true
 

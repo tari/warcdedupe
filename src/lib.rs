@@ -33,6 +33,8 @@
 //! ```
 #![deny(missing_docs)]
 
+#[cfg(feature = "chrono")]
+extern crate chrono;
 extern crate errno;
 extern crate failure;
 #[macro_use]
@@ -44,6 +46,7 @@ extern crate log;
 extern crate regex;
 extern crate twoway;
 
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::str::{self, FromStr};
 use regex::bytes::Regex;
@@ -110,7 +113,7 @@ impl From<std::io::Error> for ParseError {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Header {
     version: Version,
-    fields: Vec<Field>,
+    fields: HashMap<String, Vec<u8>>,
 }
 
 impl Header {
@@ -120,18 +123,109 @@ impl Header {
         let (mut bytes_consumed, version) = Version::parse(bytes)?;
         bytes = &bytes[bytes_consumed..];
 
-        let mut fields: Vec<Field> = Vec::new();
+        let mut fields = HashMap::new();
         while &bytes[..2] != b"\r\n" {
             let (n, field) = Field::parse(bytes)?;
             bytes_consumed += n;
             bytes = &bytes[n..];
-            fields.push(field);
+            fields.insert(field.name, field.value);
         }
 
         Ok(Header {
                version: version,
                fields: fields,
            })
+    }
+
+    fn field_str(&self, name: &str) -> Option<&str> {
+        self.fields.get(name).and_then(|b| str::from_utf8(b).ok())
+    }
+
+    /// Get the WARC-Record-ID field value.
+    /// 
+    /// Returns `None` if the field is absent or is not a valid `str`.
+    /// 
+    /// This is a mandatory field, but in the interest of parsing leniency is
+    /// is not required to exist or have any particular value in order to parse
+    /// a record header.
+    /// 
+    /// Note that a valid value is assumed to be a valid `str` because the
+    /// record ID is specified to be a RFC 3986 URI, which are always valid
+    /// ASCII (and therefore UTF-8) strings when well-formed.
+    pub fn record_id(&self) -> Option<&str> {
+        self.field_str("warc-record-id")
+    }
+
+    /// Get the Content-Length field value.
+    /// 
+    /// Returns `None` if the field is absent or does not represent a valid
+    /// content length.
+    /// 
+    /// This is a mandatory field, but in the interest of parsing leniency it
+    /// is not required to exist or have any particular value in order to parse
+    /// a record header.
+    pub fn content_length(&self) -> Option<u64> {
+        self.field_str("content-length")
+            .and_then(|s| str::parse::<u64>(s).ok())
+    }
+
+    /// Get the WARC-Date field value.
+    /// 
+    /// Returns `None` if the field is absent or does not represent a valid
+    /// `DateTime`. If you prefer to get this value as a string instead,
+    /// disable the `chrono` feature for this crate.
+    /// 
+    /// This is a mandatory field, but in the interest of parsing leniency it
+    /// is not required to exist or have any particular value in order to parse
+    /// record header.
+    #[cfg(feature = "chrono")]
+    pub fn warc_date(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        // YYYY-MM-DDThh:mm:ssZ per WARC-1.0. This is valid RFC3339, which is
+        // itself valid ISO 8601. We're slightly lenient in accepting non-UTC
+        // zone offsets.
+        use chrono::{DateTime, Utc};
+        self.field_str("warc-date")
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+    }
+
+    /// Get the WARC-Date field value.
+    /// 
+    /// Returns `None` if the field is absent or is not a valid string. If you
+    /// prefer to get this valid as a parsed datetime instead, enable the
+    /// `chrono` feature for this crate.
+    /// 
+    /// This is a mandatory field, but in the interest of parsing leniency it
+    /// is not required to exist or have any particular value in order to parse
+    /// record header.
+    #[cfg(not(feature = "chrono"))]
+    pub fn warc_date(&self) -> Option<&str> {
+        self.field_str("warc-date")
+    }
+
+    /// Get the WARC-Type field value.
+    /// 
+    /// This is a mandatory field, but in the interest of parsing leniency it
+    /// is not required to exist or be a valid string in order to parse a
+    /// record header.
+    /// 
+    /// The WARC specification non-exhausively defines the following record
+    /// types:
+    /// 
+    ///  * warcinfo
+    ///  * response
+    ///  * resource
+    ///  * request
+    ///  * metadata
+    ///  * revisit
+    ///  * conversion
+    ///  * continuation
+    /// 
+    /// Additional types are permitted as core format extensions. Creators of
+    /// extensions are encouraged by the standard to discuss their intentions
+    /// within the IIPC.
+    pub fn warc_type(&self) -> Option<&str> {
+        self.field_str("warc-type")
     }
 }
 
@@ -188,8 +282,11 @@ impl Version {
 /// A header field.
 ///
 /// The name of a field is case-insensitive, and its value may be any bytes.
+/// 
+/// This type is a convenience for parsing; actual header fields are stored in
+/// a map inside the record header.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Field {
+struct Field {
     name: String,
     value: Vec<u8>,
 }
@@ -201,21 +298,6 @@ impl Field {
             name: name.as_ref().to_lowercase(),
             value: value,
         }
-    }
-
-    /// Get the field name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Get the field value.
-    pub fn value(&self) -> &[u8] {
-        &self.value
-    }
-
-    /// Get a mutable reference to the field value.
-    pub fn value_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.value
     }
 
     /// Parse a Field from bytes.
