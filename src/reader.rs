@@ -1,12 +1,29 @@
 use std::cmp;
 use std::io::prelude::*;
-use std::io::Result as IoResult;
+use std::io::{Error as IoError, Result as IoResult};
 use std::ops::Drop;
 
 /// The number of bytes to skip per read() call when closing a record.
 ///
 /// Larger values require more memory but will reduce overhead.
 const SKIP_BUF_LEN: usize = 4096;
+
+/// An error in reading a record from an input stream.
+#[derive(Debug, PartialEq)]
+pub enum InvalidRecord {
+    /// The header of the record was malformed.
+    /// 
+    /// This may mean the input doesn't actually contain WARC records.
+    InvalidHeader(super::ParseError),
+    /// The length of the payload could not b
+    UnknownLength(String, Vec<u8>),
+}
+
+impl From<super::ParseError> for InvalidRecord {
+    fn from(e: super::ParseError) -> InvalidRecord {
+        InvalidRecord::InvalidHeader(e)
+    }
+}
 
 /// A streaming WARC record.
 ///
@@ -28,6 +45,23 @@ pub struct Record<'a, R>
     reader: &'a mut R,
 }
 
+impl<'a, R> Read for Record<'a, R>
+        where R: 'a + BufRead {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        unimplemented!();
+    }
+}
+
+impl<'a, R> BufRead for Record<'a, R> where R: 'a + BufRead {
+    fn fill_buf(&mut self) -> Result<&[u8], IoError> {
+        unimplemented!();
+    }
+
+    fn consume(&mut self, n: usize) {
+        unimplemented!();
+    }
+}
+
 impl<'a, R> Drop for Record<'a, R>
     where R: 'a + BufRead
 {
@@ -44,7 +78,8 @@ impl<'a, R> Record<'a, R>
     /// Because the record ensures the input is advanced pass the payload when
     /// it goes out of scope, the reader is inaccessible as long as the record
     /// is live.
-    pub fn read_from(reader: &'a mut R) -> Result<Self, super::ParseError> {
+    pub fn read_from(reader: &'a mut R) -> Result<Self, InvalidRecord> {
+        let header = super::get_record_header(reader)?;
         unimplemented!();
     }
 

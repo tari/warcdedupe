@@ -8,19 +8,20 @@ fn can_read_record_header() {
                    X-Multiline-Test:lol \r\n  multiline headers\r\n\
                    \r\n";
 
-    fn field(name: &str, value: &[u8]) -> Field {
-        Field::new(name, value.to_owned())
-    }
+    let mut fields: HashMap<String, Vec<u8>> = HashMap::new();
+    fields.insert("warc-type".into(), b"testdata".to_vec());
+    fields.insert("content-length".into(), b"6".to_vec());
+    fields.insert("x-multiline-test".into(), b"lol multiline headers".to_vec());
+    let expected = Header {
+        version: Version {
+            major: 1,
+            minor: 0,
+        },
+        fields: fields,
+    };
+
     assert_eq!(get_record_header(&header[..]).expect("Should be valid"),
-               Header {
-                   version: Version {
-                       major: 1,
-                       minor: 0,
-                   },
-                   fields: vec![field("Warc-Type", b"testdata"),
-                                field("Content-Length", b"6"),
-                                field("X-Multiline-Test", b"lol multiline headers")],
-               });
+               expected);
 }
 
 #[test]

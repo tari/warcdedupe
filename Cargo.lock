@@ -623,6 +623,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "warcdedupe"
 version = "0.1.0"
 dependencies = [
+ "chrono 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "criterion 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "docopt 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "errno 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
