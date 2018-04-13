@@ -11,6 +11,7 @@ use libflate::gzip;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Result as IoResult, Write};
 use std::path::{Path, PathBuf};
+use warcio::reader::InvalidRecord;
 
 const USAGE: &'static str = "
 WARC deduplicator.
@@ -23,7 +24,6 @@ write to standard output.
 
 Options:
   -h --help             Show this help.
-  --manifest=<filename> Write a manifest to the specified file.
   --compressed-input    Assume records in non-file input are compressed.
   --compress-output     Write compressed records to non-file output.
 
@@ -36,7 +36,6 @@ options are ignored each is assumed to be compressed if the file name ends in
 struct Args {
     arg_infile: Option<PathBuf>,
     arg_outfile: Option<PathBuf>,
-    flag_manifest: Option<PathBuf>,
     flag_compressed_input: bool,
     flag_compress_output: bool,
 }
@@ -102,10 +101,37 @@ fn open_output_stream(p: Option<PathBuf>, compress_stream: bool) -> Box<Write> {
 
 fn main() {
     let args: Args = Docopt::new(USAGE).and_then(|d| d.deserialize()).unwrap_or_else(|e| e.exit());
-    eprintln!("{:?}", args);
 
     let mut input = open_input_stream(args.arg_infile, args.flag_compressed_input);
     let mut output = open_output_stream(args.arg_outfile, args.flag_compress_output);
 
-    let record = warcio::reader::Record::read_from(&mut input).expect("Failed to read record");
+    loop {
+        let record = match warcio::reader::Record::read_from(&mut input) {
+            Ok(r) => r,
+            Err(InvalidRecord::EndOfStream) => {
+                break;
+            }
+            Err(e) => panic!("Error reading record: {:?}", e),
+        };
+
+        match record.header.warc_type() {
+            Some("warcinfo") => {
+                println!("WARCINFO for {}", record.header.field_str("warc-filename")
+                         .unwrap_or("[unknown warc-filename]"));
+            }
+            Some("request") => {
+                println!("REQUEST for {}", record.header.field_str("warc-target-uri")
+                         .unwrap_or("[unknown warc-target-uri]"));
+            }
+            Some("response") => {
+                println!("RESPONSE for {} ({} bytes)",
+                         record.header.field_str("warc-target-uri")
+                                .unwrap_or("[unknown warc-target-uri]"),
+                         record.header.content_length()
+                                .unwrap_or(0));
+            }
+            Some(s) => println!("UNKNOWN {}", s),
+            None => println!("MISSING_TYPE"),
+        }
+    }
 }

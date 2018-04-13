@@ -1,7 +1,9 @@
 use std::cmp;
 use std::io::prelude::*;
 use std::io::{Error as IoError, Result as IoResult};
+use std::marker::PhantomData;
 use std::ops::Drop;
+use super::ParseError;
 
 /// The number of bytes to skip per read() call when closing a record.
 ///
@@ -9,19 +11,29 @@ use std::ops::Drop;
 const SKIP_BUF_LEN: usize = 4096;
 
 /// An error in reading a record from an input stream.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum InvalidRecord {
     /// The header of the record was malformed.
-    /// 
+    ///
     /// This may mean the input doesn't actually contain WARC records.
-    InvalidHeader(super::ParseError),
-    /// The length of the payload could not b
-    UnknownLength(String, Vec<u8>),
+    InvalidHeader(ParseError),
+    /// The length of the payload could not be determined.
+    ///
+    /// Contained value is the contents of the Content-Length header.
+    UnknownLength(Option<Vec<u8>>),
+    /// Reached the end of the input stream.
+    EndOfStream,
+    /// Other I/O error.
+    IoError(IoError),
 }
 
-impl From<super::ParseError> for InvalidRecord {
-    fn from(e: super::ParseError) -> InvalidRecord {
-        InvalidRecord::InvalidHeader(e)
+impl From<ParseError> for InvalidRecord {
+    fn from(e: ParseError) -> InvalidRecord {
+        match e {
+            ParseError::IoError(e) => InvalidRecord::IoError(e),
+            ParseError::NoMoreData => InvalidRecord::EndOfStream,
+            e => InvalidRecord::InvalidHeader(e),
+        }
     }
 }
 
@@ -40,25 +52,88 @@ impl From<super::ParseError> for InvalidRecord {
 pub struct Record<'a, R>
     where R: 'a + BufRead
 {
+    /// The parsed record header.
+    pub header: super::Header,
     bytes_remaining: u64,
-    header: super::Header,
-    reader: &'a mut R,
+    reader: R,
+    marker: PhantomData<&'a mut R>,
+    debug_info: DebugInfo,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DebugInfo {
+    /// Whether the record tail has already been consumed.
+    /// 
+    /// This field is used in debug builds to ensure that the Drop logic is
+    /// correctly preventing redundant drops which can incorrectly consume
+    /// input data.
+    consumed_tail: bool,
+}
+
+#[cfg(not(debug_assertions))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DebugInfo;
+
+impl DebugInfo {
+    #[cfg(debug_assertions)]
+    fn new() -> DebugInfo {
+        DebugInfo {
+            consumed_tail: false
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn set_consumed_tail(&mut self) {
+        debug_assert!(!self.consumed_tail, "Record tail was already consumed!");
+        self.consumed_tail = true;
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn new() -> DebugInfo {
+        DebugInfo
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn set_consumed_tail(&mut self) { }
 }
 
 impl<'a, R> Read for Record<'a, R>
-        where R: 'a + BufRead {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
-        unimplemented!();
+    where R: 'a + BufRead
+{
+    fn read(&mut self, mut buf: &mut [u8]) -> Result<usize, IoError> {
+        let constrained = if (buf.len() as u64) > self.bytes_remaining {
+            &mut buf[..self.bytes_remaining as usize]
+        } else {
+            buf
+        };
+
+        let n = self.reader.read(constrained)?;
+        self.bytes_remaining -= n as u64;
+        Ok(n)
     }
 }
 
-impl<'a, R> BufRead for Record<'a, R> where R: 'a + BufRead {
+impl<'a, R> BufRead for Record<'a, R>
+    where R: 'a + BufRead
+{
     fn fill_buf(&mut self) -> Result<&[u8], IoError> {
-        unimplemented!();
+        let buf = self.reader.fill_buf()?;
+        let remaining = self.bytes_remaining as usize;
+        let out = if buf.len() > remaining {
+            &buf[..remaining]
+        } else {
+            buf
+        };
+
+        debug_assert!(out.len() <= remaining);
+        Ok(out)
     }
 
     fn consume(&mut self, n: usize) {
-        unimplemented!();
+        assert!(n <= self.bytes_remaining as usize);
+        self.reader.consume(n);
+        self.bytes_remaining -= n as u64;
     }
 }
 
@@ -66,7 +141,27 @@ impl<'a, R> Drop for Record<'a, R>
     where R: 'a + BufRead
 {
     fn drop(&mut self) {
-        self.finish().expect("Error while closing Record");
+        if let Err(e) = self.finish_internal() {
+            error!("{:?} while closing WARC record", e);
+        }
+    }
+}
+
+/// Errors that might occur when closing a record.
+#[derive(Debug)]
+pub enum FinishError {
+    /// The record tail (CRLF CRLF) was not present.
+    ///
+    /// This may be because the record is malformed and lacks the tail, or the
+    /// input is truncated. Lenient applications may wish to ignore this error.
+    MissingTail,
+    /// An I/O error occurred.
+    Io(IoError),
+}
+
+impl From<IoError> for FinishError {
+    fn from(e: IoError) -> FinishError {
+        FinishError::Io(e)
     }
 }
 
@@ -77,17 +172,63 @@ impl<'a, R> Record<'a, R>
     ///
     /// Because the record ensures the input is advanced pass the payload when
     /// it goes out of scope, the reader is inaccessible as long as the record
-    /// is live.
-    pub fn read_from(reader: &'a mut R) -> Result<Self, InvalidRecord> {
-        let header = super::get_record_header(reader)?;
-        unimplemented!();
+    /// is live if a reference is provided.
+    pub fn read_from(mut reader: R) -> Result<Self, InvalidRecord> {
+        let header = super::get_record_header(&mut reader)?;
+        let len = match header.content_length() {
+            None => {
+                return Err(InvalidRecord::UnknownLength(header.field("content-length")
+                                                            .map(|bytes| bytes.to_vec())))
+            }
+            Some(n) => n,
+        };
+
+        Ok(Record {
+               bytes_remaining: len,
+               header: header,
+               reader: reader,
+               marker: PhantomData,
+               debug_info: DebugInfo::new(),
+           })
     }
 
     /// Advance the input reader past this record's payload.
     ///
     /// Unlike the `Drop` impl, this method returns a `Result` so you can
     /// handle I/O errors that may occur while advancing the input.
-    pub fn finish(&mut self) -> IoResult<()> {
+    ///
+    /// Expects there to be two newlines following the payload as specified by
+    /// the WARC standard, but is tolerant of having none- if missing
+    /// `FinishError::MissingTail` will be returned and no bytes consumed from
+    /// the input (which may mean the reader must resync to find the next
+    /// record). If present, the bytes will be consumed from the reader.
+    pub fn finish(mut self) -> Result<(), FinishError> {
+        self.finish_internal()?;
+        // Manually deconstruct self to prevent the redundant drop but still
+        // ensure members are dropped as necessary.
+        let Record {
+            header: _,
+            bytes_remaining: _,
+            reader: _,
+            marker: _,
+            debug_info: _,
+        } = self;
+
+        Ok(())
+    }
+
+    /// Actual drop implementation.
+    /// 
+    /// This is separate from finish() so that can take ownership of self
+    /// (which it must in order to prevent a redundant drop after being called)
+    /// but the Drop impl can still call this because Drop only takes self by
+    /// reference.
+    /// 
+    /// We need to prevent redundant drops because it has side effects
+    /// (consuming the tail) and we don't want to need a flag indicating
+    /// whether we've already consume the tail (but we do use one to check
+    /// correctness of this code in debug builds).
+    fn finish_internal(&mut self) -> Result<(), FinishError> {
         let mut buf = [0u8; SKIP_BUF_LEN];
         let mut remaining = self.bytes_remaining;
 
@@ -96,6 +237,19 @@ impl<'a, R> Record<'a, R>
             self.reader.read_exact(&mut buf[..n])?;
             remaining -= n as u64;
         }
+
+        self.debug_info.set_consumed_tail();
+        {
+            let buf = self.reader.fill_buf()?;
+            if buf.len() < 4 {
+                debug!("Short read of {} bytes: input truncated or buffer too small",
+                       buf.len());
+                return Err(FinishError::MissingTail);
+            } else if &buf[..4] != b"\r\n\r\n" {
+                return Err(FinishError::MissingTail);
+            }
+        }
+        self.reader.consume(4);
 
         Ok(())
     }

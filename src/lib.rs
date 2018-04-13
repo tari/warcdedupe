@@ -67,6 +67,8 @@ pub enum ParseError {
     MalformedField,
     /// An I/O error occured while trying to read the input.
     IoError(std::io::Error),
+    /// Reached end of input.
+    NoMoreData,
 }
 
 impl std::cmp::PartialEq for ParseError {
@@ -98,6 +100,7 @@ impl std::error::Error for ParseError {
         match *self {
             InvalidSignature => "WARC signature is missing or invalid",
             MalformedField => "Header field is malformed or truncated",
+            NoMoreData => "No more data available",
             IoError(_) => "I/O error",
         }
     }
@@ -137,18 +140,30 @@ impl Header {
            })
     }
 
-    fn field_str(&self, name: &str) -> Option<&str> {
-        self.fields.get(name).and_then(|b| str::from_utf8(b).ok())
+    /// Get the value of a header field as bytes.
+    ///
+    /// Returns None if there is no such field. *The field name is
+    /// case-sensitive* and normalized to lower-case.
+    pub fn field(&self, name: &str) -> Option<&[u8]> {
+        self.fields.get(name).map(Vec::as_slice)
+    }
+
+    /// Get the value of a header field as a string.
+    ///
+    /// Returns None if there is no such field or its value is not a valid
+    /// string. *The field name is case-sensitive* and normalized to lower-case.
+    pub fn field_str(&self, name: &str) -> Option<&str> {
+        self.field(name).and_then(|b| str::from_utf8(b).ok())
     }
 
     /// Get the WARC-Record-ID field value.
-    /// 
+    ///
     /// Returns `None` if the field is absent or is not a valid `str`.
-    /// 
+    ///
     /// This is a mandatory field, but in the interest of parsing leniency is
     /// is not required to exist or have any particular value in order to parse
     /// a record header.
-    /// 
+    ///
     /// Note that a valid value is assumed to be a valid `str` because the
     /// record ID is specified to be a RFC 3986 URI, which are always valid
     /// ASCII (and therefore UTF-8) strings when well-formed.
@@ -157,24 +172,23 @@ impl Header {
     }
 
     /// Get the Content-Length field value.
-    /// 
+    ///
     /// Returns `None` if the field is absent or does not represent a valid
     /// content length.
-    /// 
+    ///
     /// This is a mandatory field, but in the interest of parsing leniency it
     /// is not required to exist or have any particular value in order to parse
     /// a record header.
     pub fn content_length(&self) -> Option<u64> {
-        self.field_str("content-length")
-            .and_then(|s| str::parse::<u64>(s).ok())
+        self.field_str("content-length").and_then(|s| str::parse::<u64>(s).ok())
     }
 
     /// Get the WARC-Date field value.
-    /// 
+    ///
     /// Returns `None` if the field is absent or does not represent a valid
     /// `DateTime`. If you prefer to get this value as a string instead,
     /// disable the `chrono` feature for this crate.
-    /// 
+    ///
     /// This is a mandatory field, but in the interest of parsing leniency it
     /// is not required to exist or have any particular value in order to parse
     /// record header.
@@ -190,11 +204,11 @@ impl Header {
     }
 
     /// Get the WARC-Date field value.
-    /// 
+    ///
     /// Returns `None` if the field is absent or is not a valid string. If you
     /// prefer to get this valid as a parsed datetime instead, enable the
     /// `chrono` feature for this crate.
-    /// 
+    ///
     /// This is a mandatory field, but in the interest of parsing leniency it
     /// is not required to exist or have any particular value in order to parse
     /// record header.
@@ -204,14 +218,14 @@ impl Header {
     }
 
     /// Get the WARC-Type field value.
-    /// 
+    ///
     /// This is a mandatory field, but in the interest of parsing leniency it
     /// is not required to exist or be a valid string in order to parse a
     /// record header.
-    /// 
+    ///
     /// The WARC specification non-exhausively defines the following record
     /// types:
-    /// 
+    ///
     ///  * warcinfo
     ///  * response
     ///  * resource
@@ -220,7 +234,7 @@ impl Header {
     ///  * revisit
     ///  * conversion
     ///  * continuation
-    /// 
+    ///
     /// Additional types are permitted as core format extensions. Creators of
     /// extensions are encouraged by the standard to discuss their intentions
     /// within the IIPC.
@@ -282,7 +296,7 @@ impl Version {
 /// A header field.
 ///
 /// The name of a field is case-insensitive, and its value may be any bytes.
-/// 
+///
 /// This type is a convenience for parsing; actual header fields are stored in
 /// a map inside the record header.
 #[derive(Debug, PartialEq, Eq)]
@@ -358,6 +372,9 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError
     let mut header: Option<(usize, Header)> = None;
     {
         let buf = reader.fill_buf()?;
+        if buf.len() == 0 {
+            return Err(ParseError::NoMoreData);
+        }
         if let Some(i) = find_crlf2(buf) {
             // Weird split of parse and consume here is necessary because buf
             // is borrowed from the reader so we can't consume until we no
