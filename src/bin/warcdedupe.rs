@@ -1,15 +1,19 @@
 extern crate docopt;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
 extern crate libflate;
 #[macro_use]
 extern crate serde_derive;
+extern crate sha1;
 extern crate warcio;
 
 use docopt::Docopt;
 use libflate::gzip;
+use sha1::{Digest, Sha1};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Result as IoResult, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use warcio::reader::InvalidRecord;
 
@@ -106,7 +110,7 @@ fn main() {
     let mut output = open_output_stream(args.arg_outfile, args.flag_compress_output);
 
     loop {
-        let record = match warcio::reader::Record::read_from(&mut input) {
+        let mut record = match warcio::reader::Record::read_from(&mut input) {
             Ok(r) => r,
             Err(InvalidRecord::EndOfStream) => {
                 break;
@@ -114,24 +118,38 @@ fn main() {
             Err(e) => panic!("Error reading record: {:?}", e),
         };
 
-        match record.header.warc_type() {
-            Some("warcinfo") => {
-                println!("WARCINFO for {}", record.header.field_str("warc-filename")
-                         .unwrap_or("[unknown warc-filename]"));
-            }
-            Some("request") => {
-                println!("REQUEST for {}", record.header.field_str("warc-target-uri")
-                         .unwrap_or("[unknown warc-target-uri]"));
-            }
-            Some("response") => {
-                println!("RESPONSE for {} ({} bytes)",
-                         record.header.field_str("warc-target-uri")
-                                .unwrap_or("[unknown warc-target-uri]"),
-                         record.header.content_length()
-                                .unwrap_or(0));
-            }
-            Some(s) => println!("UNKNOWN {}", s),
-            None => println!("MISSING_TYPE"),
+        if record.header.warc_type() != Some("response") {
+            debug!("Skip non-response record {:?}", record.header);
+            continue;
         }
+
+        let len = match record.header.content_length() {
+            Some(n) => n,
+            None => {
+                eprintln!("Ignoring record without Content-Length: {:?}", record.header);
+                continue;
+            }
+        };
+
+        let mut sha = Sha1::new();
+        let mut buf = [0u8; 8 << 10];
+
+        loop {
+            let n = match record.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => unimplemented!(),
+            };
+            sha.input(&buf[..n]);
+        }
+        let digest = sha.result();
+
+        let target = record.header.field_str("warc-target-uri")
+            .unwrap_or("<UNKNOWN>");
+
+        for byte in digest {
+            print!("{:02X}", byte);
+        }
+        println!(" {} {}", len, target);
     }
 }
