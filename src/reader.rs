@@ -1,4 +1,6 @@
 use std::cmp;
+use std::error::Error as StdError;
+use std::fmt;
 use std::io::prelude::*;
 use std::io::{Error as IoError, Result as IoResult};
 use std::marker::PhantomData;
@@ -37,6 +39,46 @@ impl From<ParseError> for InvalidRecord {
     }
 }
 
+impl StdError for InvalidRecord {
+    fn description(&self) -> &str {
+        use self::InvalidRecord::*;
+
+        match self {
+            &InvalidHeader(_) => "invalid or malformed WARC record",
+            &UnknownLength(_) => "missing or malformed record Content-Length",
+            &EndOfStream => "unexpected end of input",
+            &IoError(ref e) => e.description(),
+        }
+    }
+
+    fn cause(&self) -> Option<&StdError> {
+        match self {
+            &InvalidRecord::IoError(ref e) => Some(e),
+            &InvalidRecord::InvalidHeader(ref e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for InvalidRecord {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "Error reading WARC record: ")?;
+
+        use self::InvalidRecord::*;
+        match self {
+            &InvalidHeader(ref e) => write!(f, "invalid record header: {}", e),
+            &UnknownLength(None) => write!(f, "record missing required Content-Length header"),
+            &UnknownLength(Some(ref bytes)) => {
+                write!(f,
+                       "illegal numeric value for Content-Length: {}",
+                       String::from_utf8_lossy(bytes))
+            }
+            &EndOfStream => write!(f, "unexpected end of input"),
+            &IoError(ref e) => write!(f, "I/O error: {}", e),
+        }
+    }
+}
+
 /// A streaming WARC record.
 ///
 /// The header of the record is accessible via the `header` method, and its
@@ -49,6 +91,7 @@ impl From<ParseError> for InvalidRecord {
 // Efficient seeking if we have an uncompressed file or compressed file with
 // CDX index is impossible here. We'll need a BufRead-like trait to cover
 // those.
+#[derive(Debug)]
 pub struct Record<'a, R>
     where R: 'a + BufRead
 {
@@ -64,7 +107,7 @@ pub struct Record<'a, R>
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DebugInfo {
     /// Whether the record tail has already been consumed.
-    /// 
+    ///
     /// This field is used in debug builds to ensure that the Drop logic is
     /// correctly preventing redundant drops which can incorrectly consume
     /// input data.
@@ -78,9 +121,7 @@ struct DebugInfo;
 impl DebugInfo {
     #[cfg(debug_assertions)]
     fn new() -> DebugInfo {
-        DebugInfo {
-            consumed_tail: false
-        }
+        DebugInfo { consumed_tail: false }
     }
 
     #[cfg(debug_assertions)]
@@ -95,13 +136,13 @@ impl DebugInfo {
     }
 
     #[cfg(not(debug_assertions))]
-    fn set_consumed_tail(&mut self) { }
+    fn set_consumed_tail(&mut self) {}
 }
 
 impl<'a, R> Read for Record<'a, R>
     where R: 'a + BufRead
 {
-    fn read(&mut self, mut buf: &mut [u8]) -> Result<usize, IoError> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         let constrained = if (buf.len() as u64) > self.bytes_remaining {
             &mut buf[..self.bytes_remaining as usize]
         } else {
@@ -165,6 +206,35 @@ impl From<IoError> for FinishError {
     }
 }
 
+impl fmt::Display for FinishError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "Error closing WARC record: ")?;
+        if let &FinishError::Io(ref e) = self {
+            write!(f, "I/O error: {}", e)
+        } else {
+            write!(f, "{}", self.description())
+        }
+    }
+}
+
+impl StdError for FinishError {
+    fn description(&self) -> &str {
+        use self::FinishError::*;
+        match self {
+            &MissingTail => "missing record tail",
+            &Io(ref e) => e.description(),
+        }
+    }
+
+    fn cause(&self) -> Option<&StdError> {
+        if let &FinishError::Io(ref e) = self {
+            Some(e)
+        } else {
+            None
+        }
+    }
+}
+
 impl<'a, R> Record<'a, R>
     where R: 'a + BufRead
 {
@@ -199,31 +269,25 @@ impl<'a, R> Record<'a, R>
     ///
     /// Expects there to be two newlines following the payload as specified by
     /// the WARC standard, but is tolerant of having none- if missing
-    /// `FinishError::MissingTail` will be returned and no bytes consumed from
-    /// the input (which may mean the reader must resync to find the next
-    /// record). If present, the bytes will be consumed from the reader.
+    /// `FinishError::MissingTail` will be returned. Regardless of the presence
+    /// of a correct tail however, bytes will be consumed which may cause some
+    /// of the following data to be lost.
     pub fn finish(mut self) -> Result<(), FinishError> {
         self.finish_internal()?;
         // Manually deconstruct self to prevent the redundant drop but still
         // ensure members are dropped as necessary.
-        let Record {
-            header: _,
-            bytes_remaining: _,
-            reader: _,
-            marker: _,
-            debug_info: _,
-        } = self;
+        let Record { header: _, bytes_remaining: _, reader: _, marker: _, debug_info: _ } = self;
 
         Ok(())
     }
 
     /// Actual drop implementation.
-    /// 
+    ///
     /// This is separate from finish() so that can take ownership of self
     /// (which it must in order to prevent a redundant drop after being called)
     /// but the Drop impl can still call this because Drop only takes self by
     /// reference.
-    /// 
+    ///
     /// We need to prevent redundant drops because it has side effects
     /// (consuming the tail) and we don't want to need a flag indicating
     /// whether we've already consume the tail (but we do use one to check
@@ -240,16 +304,20 @@ impl<'a, R> Record<'a, R>
 
         self.debug_info.set_consumed_tail();
         {
-            let buf = self.reader.fill_buf()?;
-            if buf.len() < 4 {
-                debug!("Short read of {} bytes: input truncated or buffer too small",
-                       buf.len());
-                return Err(FinishError::MissingTail);
-            } else if &buf[..4] != b"\r\n\r\n" {
+            let mut buf = [0u8; 4];
+            match self.reader.read_exact(&mut buf[..]) {
+                Err(e) => {
+                    if e.kind() == ::std::io::ErrorKind::UnexpectedEof {
+                        return Err(FinishError::MissingTail);
+                    }
+                    return Err(e.into());
+                }
+                Ok(_) => {}
+            }
+            if &buf[..] != b"\r\n\r\n" {
                 return Err(FinishError::MissingTail);
             }
         }
-        self.reader.consume(4);
 
         Ok(())
     }

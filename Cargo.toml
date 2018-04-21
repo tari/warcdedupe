@@ -29,6 +29,7 @@ log = "0.4.1"
 regex = "0.2.10"
 serde = "1.0.33"
 serde_derive = "1.0.33"
+sha-1 = "0.7"
 twoway = "0.1.7"
 
 [dev-dependencies]
