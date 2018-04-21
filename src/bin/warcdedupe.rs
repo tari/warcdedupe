@@ -63,13 +63,13 @@ lazy_static!{
 fn open_input_stream(p: Option<PathBuf>, compressed_stream: bool) -> Box<BufRead> {
     if let Some(p) = maybe_file(p) {
         // From file
-        let file = File::open(&p).expect("Failed to open input file");
+        let file = BufReader::new(File::open(&p).expect("Failed to open input file"));
 
         if file_is_gzip(&p) {
             Box::new(BufReader::new(gzip::MultiDecoder::new(file).expect(
                         "Failed to initialize gzip decoder")))
         } else {
-            Box::new(BufReader::new(file))
+            Box::new(file)
         }
     } else {
         // From stdin
