@@ -73,14 +73,11 @@ pub enum ParseError {
 
 impl std::cmp::PartialEq for ParseError {
     fn eq(&self, other: &Self) -> bool {
-        use std::error::Error;
         use ParseError::*;
 
         match (self, other) {
             (&InvalidSignature, &InvalidSignature) | (&MalformedField, &MalformedField) => true,
-            (&IoError(ref e1), &IoError(ref e2)) => {
-                e1.kind() == e2.kind() && e1.description() == e2.description()
-            }
+            (&IoError(ref e1), &IoError(ref e2)) => e1.kind() == e2.kind(),
             (_, _) => false,
         }
     }
@@ -88,19 +85,24 @@ impl std::cmp::PartialEq for ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use std::error::Error;
-        write!(f, "Invalid WARC header: {}", self.description())
+        use ParseError::*;
+
+        write!(f, "Invalid WARC header: ")?;
+        match self {
+            InvalidSignature => write!(f, "WARC signature is missing or invalid"),
+            MalformedField => write!(f, "Header field is malformed or truncated"),
+            NoMoreData => write!(f, "No more data available"),
+            IoError(e) => write!(f, "I/O error: {}", e),
+        }
     }
 }
 
 impl std::error::Error for ParseError {
-    fn description(&self) -> &str {
-        use ParseError::*;
-        match *self {
-            InvalidSignature => "WARC signature is missing or invalid",
-            MalformedField => "Header field is malformed or truncated",
-            NoMoreData => "No more data available",
-            IoError(_) => "I/O error",
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        if let ParseError::IoError(ref e) = self {
+            Some(e)
+        } else {
+            None
         }
     }
 }
@@ -335,7 +337,7 @@ impl Field {
         let name = unsafe {
             // RE only matches a subset of ASCII, so we're also guaranteed that
             // the name is valid UTF-8 as long as there was a match.
-            debug_assert!(m[1].iter().all(std::ascii::AsciiExt::is_ascii));
+            debug_assert!(m[1].iter().all(u8::is_ascii));
             str::from_utf8_unchecked(&m[1])
         };
         let mut bytes_taken = m[0].len();

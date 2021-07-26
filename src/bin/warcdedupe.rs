@@ -61,7 +61,7 @@ lazy_static! {
     static ref STDOUT: std::io::Stdout = std::io::stdout();
 }
 
-fn open_input_stream(p: Option<PathBuf>, compressed_stream: bool) -> Box<BufRead> {
+fn open_input_stream(p: Option<PathBuf>, compressed_stream: bool) -> Box<dyn BufRead> {
     if let Some(p) = maybe_file(p) {
         // From file
         let file = BufReader::new(File::open(&p).expect("Failed to open input file"));
@@ -87,7 +87,7 @@ fn open_input_stream(p: Option<PathBuf>, compressed_stream: bool) -> Box<BufRead
 }
 
 // TODO we need to write with record granularity too, need a custom trait.
-fn open_output_stream(p: Option<PathBuf>, compress_stream: bool) -> Box<Write> {
+fn open_output_stream(p: Option<PathBuf>, compress_stream: bool) -> Box<dyn Write> {
     if let Some(p) = maybe_file(p) {
         // To file
         let file = File::create(&p).expect("Failed to create output file");
@@ -113,7 +113,7 @@ fn main() {
         .unwrap_or_else(|e| e.exit());
 
     let mut input = open_input_stream(args.arg_infile, args.flag_compressed_input);
-    let mut output = open_output_stream(args.arg_outfile, args.flag_compress_output);
+    let output = open_output_stream(args.arg_outfile, args.flag_compress_output);
 
     let mut input_size = 0u64;
     let mut output_size = 0u64;
@@ -150,7 +150,11 @@ fn main() {
             let n = match record.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => n,
-                Err(e) => unimplemented!(),
+                Err(e) => panic!(
+                    "Failed to read body of record {}: {}",
+                    record.header.record_id().unwrap_or("<missing>"),
+                    e
+                ),
             };
             sha.update(&buf[..n]);
         }

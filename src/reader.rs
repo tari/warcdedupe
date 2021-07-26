@@ -3,7 +3,7 @@ use std::cmp;
 use std::error::Error as StdError;
 use std::fmt;
 use std::io::prelude::*;
-use std::io::{Error as IoError, Result as IoResult};
+use std::io::Error as IoError;
 use std::marker::PhantomData;
 use std::ops::Drop;
 
@@ -40,18 +40,7 @@ impl From<ParseError> for InvalidRecord {
 }
 
 impl StdError for InvalidRecord {
-    fn description(&self) -> &str {
-        use self::InvalidRecord::*;
-
-        match self {
-            &InvalidHeader(_) => "invalid or malformed WARC record",
-            &UnknownLength(_) => "missing or malformed record Content-Length",
-            &EndOfStream => "unexpected end of input",
-            &IoError(ref e) => e.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&StdError> {
+    fn cause(&self) -> Option<&dyn StdError> {
         match self {
             &InvalidRecord::IoError(ref e) => Some(e),
             &InvalidRecord::InvalidHeader(ref e) => Some(e),
@@ -217,24 +206,15 @@ impl From<IoError> for FinishError {
 impl fmt::Display for FinishError {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "Error closing WARC record: ")?;
-        if let &FinishError::Io(ref e) = self {
-            write!(f, "I/O error: {}", e)
-        } else {
-            write!(f, "{}", self.description())
+        match self {
+            FinishError::Io(ref e) => write!(f, "I/O error: {}", e),
+            FinishError::MissingTail => write!(f, "missing record tail"),
         }
     }
 }
 
 impl StdError for FinishError {
-    fn description(&self) -> &str {
-        use self::FinishError::*;
-        match self {
-            &MissingTail => "missing record tail",
-            &Io(ref e) => e.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&StdError> {
+    fn cause(&self) -> Option<&dyn StdError> {
         if let &FinishError::Io(ref e) = self {
             Some(e)
         } else {
