@@ -1,0 +1,14 @@
+# Setup a cache to cache job parts between jobs to ensure faster builds
+cache:
+    key: "$CI_JOB_NAME"
+    untracked: true
+    paths:
+    - $HOME/.cargo/
+    - target/
+
+test:
+  image: rust
+  script:
+    - rustc --version && cargo --version
+    - cargo build
+    - cargo test --verbose
