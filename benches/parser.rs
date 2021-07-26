@@ -5,10 +5,10 @@ extern crate warcio;
 use criterion::{Criterion, Fun};
 use std::io::BufRead;
 use std::time::Duration;
-use warcio::{Header, ParseError, get_record_header};
+use warcio::{get_record_header, Header, ParseError};
 
 criterion_main!(benches);
-criterion_group!{
+criterion_group! {
     name = benches;
     config = Criterion::default().measurement_time(Duration::from_secs(30));
     targets = bench_get_record_header
@@ -58,9 +58,11 @@ fn get_record_header_windows<R: BufRead>(mut reader: R) -> Result<Header, ParseE
         // Copy out of the reader
         buf.extend(reader.fill_buf()?);
         if buf.len() == bytes_consumed {
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof,
-                                           "WARC header not terminated")
-                               .into());
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "WARC header not terminated",
+            )
+            .into());
         }
 
         if let Some(i) = find_crlf2(&buf) {
@@ -97,8 +99,9 @@ fn bench_get_record_header(c: &mut Criterion) {
            \"--load-cookies\" \"cookies.txt\" \"--delete-after\" \"-i\" \"-\"\
           \r\n";
 
-    let windows = Fun::new("Windows",
-                           |b, _| b.iter(|| get_record_header_windows(DATA).unwrap()));
+    let windows = Fun::new("Windows", |b, _| {
+        b.iter(|| get_record_header_windows(DATA).unwrap())
+    });
     let twoway = Fun::new("Twoway", |b, _| b.iter(|| get_record_header(DATA).unwrap()));
 
     c.bench_functions("get_record_header", vec![windows, twoway], 0);

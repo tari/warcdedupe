@@ -46,10 +46,10 @@ extern crate log;
 extern crate regex;
 extern crate twoway;
 
+use regex::bytes::Regex;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::str::{self, FromStr};
-use regex::bytes::Regex;
 
 //mod copy;
 //mod file;
@@ -77,8 +77,7 @@ impl std::cmp::PartialEq for ParseError {
         use ParseError::*;
 
         match (self, other) {
-            (&InvalidSignature, &InvalidSignature) |
-            (&MalformedField, &MalformedField) => true,
+            (&InvalidSignature, &InvalidSignature) | (&MalformedField, &MalformedField) => true,
             (&IoError(ref e1), &IoError(ref e2)) => {
                 e1.kind() == e2.kind() && e1.description() == e2.description()
             }
@@ -135,9 +134,9 @@ impl Header {
         }
 
         Ok(Header {
-               version: version,
-               fields: fields,
-           })
+            version: version,
+            fields: fields,
+        })
     }
 
     /// Get the value of a header field as bytes.
@@ -180,7 +179,8 @@ impl Header {
     /// is not required to exist or have any particular value in order to parse
     /// a record header.
     pub fn content_length(&self) -> Option<u64> {
-        self.field_str("content-length").and_then(|s| str::parse::<u64>(s).ok())
+        self.field_str("content-length")
+            .and_then(|s| str::parse::<u64>(s).ok())
     }
 
     /// Get the WARC-Date field value.
@@ -268,8 +268,8 @@ impl Version {
     /// consumed and the version.
     pub fn parse(bytes: &[u8]) -> Result<(usize, Version), ParseError> {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"^WARC/(\d+)\.(\d+)\r\n")
-                .expect("Version regex invalid");
+            static ref RE: Regex =
+                Regex::new(r"^WARC/(\d+)\.(\d+)\r\n").expect("Version regex invalid");
         }
         fn bytes_to_u32(bytes: &[u8]) -> Result<u32, ParseError> {
             match str::from_utf8(bytes).map(u32::from_str) {
@@ -319,10 +319,10 @@ impl Field {
     /// Returns the number of bytes consumed and the parsed field on succes.
     pub fn parse(bytes: &[u8]) -> Result<(usize, Field), ParseError> {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"^([a-zA-Z_\-]+): *(.*?)\r\n")
-                .expect("Field regex invalid");
-            static ref CONTINUATION: Regex = Regex::new(r"^[ \t]+(.*?)\r\n")
-                .expect("Continuation regex invalid");
+            static ref RE: Regex =
+                Regex::new(r"^([a-zA-Z_\-]+): *(.*?)\r\n").expect("Field regex invalid");
+            static ref CONTINUATION: Regex =
+                Regex::new(r"^[ \t]+(.*?)\r\n").expect("Continuation regex invalid");
         }
 
         let m = match RE.captures(bytes) {
@@ -401,9 +401,11 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError
         buf.extend(reader.fill_buf()?);
         if buf.len() == bytes_consumed {
             // Read returned 0 bytes
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof,
-                                           "WARC header not terminated")
-                               .into());
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "WARC header not terminated",
+            )
+            .into());
         }
 
         // Only search new data; start from the earliest possible location

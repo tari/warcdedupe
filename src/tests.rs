@@ -13,15 +13,14 @@ fn can_read_record_header() {
     fields.insert("content-length".into(), b"6".to_vec());
     fields.insert("x-multiline-test".into(), b"lol multiline headers".to_vec());
     let expected = Header {
-        version: Version {
-            major: 1,
-            minor: 0,
-        },
+        version: Version { major: 1, minor: 0 },
         fields: fields,
     };
 
-    assert_eq!(get_record_header(&header[..]).expect("Should be valid"),
-               expected);
+    assert_eq!(
+        get_record_header(&header[..]).expect("Should be valid"),
+        expected
+    );
 }
 
 #[test]
@@ -70,23 +69,29 @@ fn extra_buffering_works() {
         }
     }
 
-    let mut reader = DoubleBuffer::Start(b"WARC/1.0\r\n\
+    let mut reader = DoubleBuffer::Start(
+        b"WARC/1.0\r\n\
                                            X-First-Header: yes\r\n\
                                            X-Second-Header:yes\r\n\
                                            \r",
-                                         // Header termination spans two buffers
-                                         // to catch potential errors there.
-                                         b"\nIGNORED_DATA");
+        // Header termination spans two buffers
+        // to catch potential errors there.
+        b"\nIGNORED_DATA",
+    );
     get_record_header(&mut reader).expect("failed to parse valid header");
     assert_eq!(reader, DoubleBuffer::Done(12));
 }
 
 #[test]
 fn incorrect_signature_is_invalid() {
-    assert_eq!(Version::parse(b"\x89PNG\r\n\x1a\n"),
-               Err(ParseError::InvalidSignature));
-    assert_eq!(Version::parse(b"WARC/1.0a\r\n"),
-               Err(ParseError::InvalidSignature));
+    assert_eq!(
+        Version::parse(b"\x89PNG\r\n\x1a\n"),
+        Err(ParseError::InvalidSignature)
+    );
+    assert_eq!(
+        Version::parse(b"WARC/1.0a\r\n"),
+        Err(ParseError::InvalidSignature)
+    );
 }
 
 #[test]
@@ -95,16 +100,24 @@ fn truncated_header_is_invalid() {
     const BYTES: &[u8] = b"WARC/1.1\r\n
                            Warc-Type: testdata\r\n\r";
 
-    assert_eq!(get_record_header(BYTES),
-               Err(ParseError::IoError(io::Error::new(io::ErrorKind::UnexpectedEof,
-                                                      "WARC header not terminated"))));
+    assert_eq!(
+        get_record_header(BYTES),
+        Err(ParseError::IoError(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "WARC header not terminated"
+        )))
+    );
 }
 
 #[test]
 fn invalid_fields_are_invalid() {
-    assert_eq!(Field::parse(b"This is not a valid field"),
-               Err(ParseError::MalformedField));
+    assert_eq!(
+        Field::parse(b"This is not a valid field"),
+        Err(ParseError::MalformedField)
+    );
 
-    assert_eq!(Field::parse(b"X-Invalid-UTF-8\xFF: yes"),
-               Err(ParseError::MalformedField));
+    assert_eq!(
+        Field::parse(b"X-Invalid-UTF-8\xFF: yes"),
+        Err(ParseError::MalformedField)
+    );
 }

@@ -1,3 +1,4 @@
+use super::ParseError;
 use std::cmp;
 use std::error::Error as StdError;
 use std::fmt;
@@ -5,7 +6,6 @@ use std::io::prelude::*;
 use std::io::{Error as IoError, Result as IoResult};
 use std::marker::PhantomData;
 use std::ops::Drop;
-use super::ParseError;
 
 /// The number of bytes to skip per read() call when closing a record.
 ///
@@ -69,9 +69,11 @@ impl fmt::Display for InvalidRecord {
             &InvalidHeader(ref e) => write!(f, "invalid record header: {}", e),
             &UnknownLength(None) => write!(f, "record missing required Content-Length header"),
             &UnknownLength(Some(ref bytes)) => {
-                write!(f,
-                       "illegal numeric value for Content-Length: {}",
-                       String::from_utf8_lossy(bytes))
+                write!(
+                    f,
+                    "illegal numeric value for Content-Length: {}",
+                    String::from_utf8_lossy(bytes)
+                )
             }
             &EndOfStream => write!(f, "unexpected end of input"),
             &IoError(ref e) => write!(f, "I/O error: {}", e),
@@ -93,7 +95,8 @@ impl fmt::Display for InvalidRecord {
 // those.
 #[derive(Debug)]
 pub struct Record<'a, R>
-    where R: 'a + BufRead
+where
+    R: 'a + BufRead,
 {
     /// The parsed record header.
     pub header: super::Header,
@@ -121,7 +124,9 @@ struct DebugInfo;
 impl DebugInfo {
     #[cfg(debug_assertions)]
     fn new() -> DebugInfo {
-        DebugInfo { consumed_tail: false }
+        DebugInfo {
+            consumed_tail: false,
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -140,7 +145,8 @@ impl DebugInfo {
 }
 
 impl<'a, R> Read for Record<'a, R>
-    where R: 'a + BufRead
+where
+    R: 'a + BufRead,
 {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         let constrained = if (buf.len() as u64) > self.bytes_remaining {
@@ -156,7 +162,8 @@ impl<'a, R> Read for Record<'a, R>
 }
 
 impl<'a, R> BufRead for Record<'a, R>
-    where R: 'a + BufRead
+where
+    R: 'a + BufRead,
 {
     fn fill_buf(&mut self) -> Result<&[u8], IoError> {
         let buf = self.reader.fill_buf()?;
@@ -179,7 +186,8 @@ impl<'a, R> BufRead for Record<'a, R>
 }
 
 impl<'a, R> Drop for Record<'a, R>
-    where R: 'a + BufRead
+where
+    R: 'a + BufRead,
 {
     fn drop(&mut self) {
         if let Err(e) = self.finish_internal() {
@@ -236,30 +244,32 @@ impl StdError for FinishError {
 }
 
 impl<'a, R> Record<'a, R>
-    where R: 'a + BufRead
+where
+    R: 'a + BufRead,
 {
     /// Read a record from an input stream.
     ///
-    /// Because the record ensures the input is advanced pass the payload when
+    /// Because the record ensures the input is advanced past the payload when
     /// it goes out of scope, the reader is inaccessible as long as the record
     /// is live if a reference is provided.
     pub fn read_from(mut reader: R) -> Result<Self, InvalidRecord> {
         let header = super::get_record_header(&mut reader)?;
         let len = match header.content_length() {
             None => {
-                return Err(InvalidRecord::UnknownLength(header.field("content-length")
-                                                            .map(|bytes| bytes.to_vec())))
+                return Err(InvalidRecord::UnknownLength(
+                    header.field("content-length").map(|bytes| bytes.to_vec()),
+                ))
             }
             Some(n) => n,
         };
 
         Ok(Record {
-               bytes_remaining: len,
-               header: header,
-               reader: reader,
-               marker: PhantomData,
-               debug_info: DebugInfo::new(),
-           })
+            bytes_remaining: len,
+            header: header,
+            reader: reader,
+            marker: PhantomData,
+            debug_info: DebugInfo::new(),
+        })
     }
 
     /// Advance the input reader past this record's payload.
@@ -276,7 +286,13 @@ impl<'a, R> Record<'a, R>
         self.finish_internal()?;
         // Manually deconstruct self to prevent the redundant drop but still
         // ensure members are dropped as necessary.
-        let Record { header: _, bytes_remaining: _, reader: _, marker: _, debug_info: _ } = self;
+        let Record {
+            header: _,
+            bytes_remaining: _,
+            reader: _,
+            marker: _,
+            debug_info: _,
+        } = self;
 
         Ok(())
     }

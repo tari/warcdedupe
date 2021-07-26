@@ -56,7 +56,7 @@ fn file_is_gzip(p: &Path) -> bool {
 
 // Lazy statics for stdio because we lock them to help ensure no accidental use
 // otherwise.
-lazy_static!{
+lazy_static! {
     static ref STDIN: std::io::Stdin = std::io::stdin();
     static ref STDOUT: std::io::Stdout = std::io::stdout();
 }
@@ -67,16 +67,19 @@ fn open_input_stream(p: Option<PathBuf>, compressed_stream: bool) -> Box<BufRead
         let file = BufReader::new(File::open(&p).expect("Failed to open input file"));
 
         if file_is_gzip(&p) {
-            Box::new(BufReader::new(gzip::MultiDecoder::new(file).expect(
-                        "Failed to initialize gzip decoder")))
+            Box::new(BufReader::new(
+                gzip::MultiDecoder::new(file).expect("Failed to initialize gzip decoder"),
+            ))
         } else {
             Box::new(file)
         }
     } else {
         // From stdin
         if compressed_stream {
-            Box::new(BufReader::new(gzip::MultiDecoder::new(STDIN.lock()).expect(
-                    "Failed to set up compressed input stream")))
+            Box::new(BufReader::new(
+                gzip::MultiDecoder::new(STDIN.lock())
+                    .expect("Failed to set up compressed input stream"),
+            ))
         } else {
             Box::new(STDIN.lock())
         }
@@ -105,7 +108,9 @@ fn open_output_stream(p: Option<PathBuf>, compress_stream: bool) -> Box<Write> {
 }
 
 fn main() {
-    let args: Args = Docopt::new(USAGE).and_then(|d| d.deserialize()).unwrap_or_else(|e| e.exit());
+    let args: Args = Docopt::new(USAGE)
+        .and_then(|d| d.deserialize())
+        .unwrap_or_else(|e| e.exit());
 
     let mut input = open_input_stream(args.arg_infile, args.flag_compressed_input);
     let mut output = open_output_stream(args.arg_outfile, args.flag_compress_output);
@@ -130,7 +135,10 @@ fn main() {
         let len = match record.header.content_length() {
             Some(n) => n,
             None => {
-                eprintln!("Ignoring record without Content-Length: {:?}", record.header);
+                eprintln!(
+                    "Ignoring record without Content-Length: {:?}",
+                    record.header
+                );
                 continue;
             }
         };
@@ -144,26 +152,29 @@ fn main() {
                 Ok(n) => n,
                 Err(e) => unimplemented!(),
             };
-            sha.input(&buf[..n]);
+            sha.update(&buf[..n]);
         }
         let digest = {
             let mut fixed = [0u8; 20];
-            fixed.copy_from_slice(&sha.result());
+            fixed.copy_from_slice(&sha.finalize());
             fixed
         };
 
         let target = match record.header.field_str("warc-target-uri") {
             None => {
-                eprintln!("Ignoring record without warc-target-uri: {:?}", record.header);
+                eprintln!(
+                    "Ignoring record without warc-target-uri: {:?}",
+                    record.header
+                );
                 continue;
-            },
-            Some(t) => t
+            }
+            Some(t) => t,
         };
         let timestamp = match record.header.warc_date() {
             None => {
                 eprintln!("Ignoring record without warc-date: {:?}", record.header);
                 continue;
-            },
+            }
             Some(t) => t,
         };
 
@@ -188,7 +199,7 @@ fn main() {
         match dedup.add(target.to_owned(), timestamp.to_owned(), digest) {
             Some((_, first_seen)) => {
                 println!("{} dup {} size {}", target, first_seen, len);
-            },
+            }
             None => {
                 // Not a duplicate
                 output_size += len;
@@ -196,7 +207,12 @@ fn main() {
         }
     }
 
-    eprintln!("{} bytes in, {} out\n{} saved", input_size, output_size, input_size - output_size);
+    eprintln!(
+        "{} bytes in, {} out\n{} saved",
+        input_size,
+        output_size,
+        input_size - output_size
+    );
 }
 
 /// Generic log for tracking seen responses.
@@ -211,8 +227,12 @@ trait ResponseLog {
     /// URI and date that it was first seen.
     // TODO arbitrary GenericArray digest that could be multiple ones
     // concatenated for better collision resistance?
-    fn add<'a, 'b>(&'a mut self, target_uri: String, date: String, digest: [u8; 20])
-        -> Option<(String, &'a str)>;
+    fn add<'a, 'b>(
+        &'a mut self,
+        target_uri: String,
+        date: String,
+        digest: [u8; 20],
+    ) -> Option<(String, &'a str)>;
 }
 
 /// Basic implementation of a `ResponseLog`.
@@ -223,14 +243,17 @@ struct InMemoryResponseLog(HashMap<([u8; 20], String), String>);
 
 impl InMemoryResponseLog {
     fn new() -> Self {
-        InMemoryResponseLog(
-            HashMap::new()
-        )
+        InMemoryResponseLog(HashMap::new())
     }
 }
 
 impl ResponseLog for InMemoryResponseLog {
-    fn add<'a, 'b>(&'a mut self, target_uri: String, date: String, digest: [u8; 20]) -> Option<(String, &'a str)> {
+    fn add<'a, 'b>(
+        &'a mut self,
+        target_uri: String,
+        date: String,
+        digest: [u8; 20],
+    ) -> Option<(String, &'a str)> {
         // API limitation: we need to take an owned copy of the target URI to look up, even if we
         // don't need to insert since K: Borrow<Q> doesn't allow us to return a ref to a tuple that
         // the HashMap owns. But we also can't get a ref to the key to return without
@@ -247,10 +270,8 @@ impl ResponseLog for InMemoryResponseLog {
 }
 
 /// A `ResponseLog` implementation backed by LMDB, a high-performance embedded key-value store.
-/// 
+///
 /// LMDB should scale better than the simple in-memory response log and is persistent, but like
 /// the in-memory log is limited to a single machine.
 #[cfg(feature = "lmdb")]
-struct LmdbResponseLog {
-
-}
+struct LmdbResponseLog {}
