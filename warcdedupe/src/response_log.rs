@@ -11,12 +11,7 @@ pub trait ResponseLog<Digest: Eq> {
     ///
     /// Returns None if that response has not been seen before, otherwise the
     /// URI and date that it was first seen.
-    fn add<'a, 'b>(
-        &'a mut self,
-        target_uri: String,
-        date: String,
-        digest: Digest,
-    ) -> Option<(String, &'a str)>;
+    fn add(&mut self, target_uri: String, date: String, digest: Digest) -> Option<(String, &str)>;
 }
 
 /// Basic implementation of a `ResponseLog`.
@@ -25,30 +20,44 @@ pub trait ResponseLog<Digest: Eq> {
 /// URL because it currently lacks strong protection against hash collisions.
 pub struct InMemoryResponseLog<Digest>(HashMap<(Digest, String), String>);
 
-impl<Digest> InMemoryResponseLog<Digest> {
-    pub fn new() -> Self {
+impl<Digest> Default for InMemoryResponseLog<Digest> {
+    fn default() -> Self {
         InMemoryResponseLog(HashMap::new())
     }
 }
 
+impl<Digest> InMemoryResponseLog<Digest> {
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
 impl<Digest: Eq + Hash> ResponseLog<Digest> for InMemoryResponseLog<Digest> {
-    fn add<'a, 'b>(
-        &'a mut self,
-        target_uri: String,
-        date: String,
-        digest: Digest,
-    ) -> Option<(String, &'a str)> {
-        // API limitation: we need to take an owned copy of the target URI to look up, even if we
-        // don't need to insert since K: Borrow<Q> doesn't allow us to return a ref to a tuple that
-        // the HashMap owns. But we also can't get a ref to the key to return without
-        // HashMap::get_key_value (#49347), so we can at least reuse it.
-        let key = (digest, target_uri.to_owned());
-        if self.0.contains_key(&key) {
-            let first_seen = self.0.get(&key).unwrap();
-            Some((key.1, first_seen))
-        } else {
-            self.0.insert(key, date);
-            None
+    fn add(&mut self, target_uri: String, date: String, digest: Digest) -> Option<(String, &str)> {
+        // The below alternate implementation would be nice because it allows us to return a
+        // ref to the key, but borrowck doesn't understand that insert() can't alias the result
+        // of get_key_value() so we're stuck with copying for now.
+        /*
+        if let Some(((_, uri), v)) = self.0.get_key_value(&key) {
+            return Some((uri, v));
+        }
+        self.0.insert(key, date);
+        None
+         */
+        use std::collections::hash_map::Entry;
+
+        match self.0.entry((digest, target_uri.clone())) {
+            Entry::Occupied(value) => {
+                // subtle borrowck point: get() returns a ref to the entry, whereas
+                // into_mut() is the only method on an Entry that returns a ref to the
+                // underlying map: we need a ref to the map (not a local) in order
+                // to return it.
+                Some((target_uri, value.into_mut()))
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(date);
+                None
+            }
         }
     }
 }

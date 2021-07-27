@@ -14,7 +14,7 @@ use warcdedupe::digest::UrlLengthSha1Digester;
 use warcdedupe::response_log::InMemoryResponseLog;
 use warcdedupe::Deduplicator;
 
-const USAGE: &'static str = "
+const USAGE: &str = "
 WARC deduplicator.
 
 Usage:

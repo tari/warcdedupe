@@ -42,8 +42,8 @@ impl From<ParseError> for InvalidRecord {
 impl StdError for InvalidRecord {
     fn cause(&self) -> Option<&dyn StdError> {
         match self {
-            &InvalidRecord::IoError(ref e) => Some(e),
-            &InvalidRecord::InvalidHeader(ref e) => Some(e),
+            InvalidRecord::IoError(e) => Some(e),
+            InvalidRecord::InvalidHeader(e) => Some(e),
             _ => None,
         }
     }
@@ -55,17 +55,17 @@ impl fmt::Display for InvalidRecord {
 
         use self::InvalidRecord::*;
         match self {
-            &InvalidHeader(ref e) => write!(f, "invalid record header: {}", e),
-            &UnknownLength(None) => write!(f, "record missing required Content-Length header"),
-            &UnknownLength(Some(ref bytes)) => {
+            InvalidHeader(e) => write!(f, "invalid record header: {}", e),
+            UnknownLength(None) => write!(f, "record missing required Content-Length header"),
+            UnknownLength(Some(bytes)) => {
                 write!(
                     f,
                     "illegal numeric value for Content-Length: {}",
                     String::from_utf8_lossy(bytes)
                 )
             }
-            &EndOfStream => write!(f, "unexpected end of input"),
-            &IoError(ref e) => write!(f, "I/O error: {}", e),
+            EndOfStream => write!(f, "unexpected end of input"),
+            IoError(e) => write!(f, "I/O error: {}", e),
         }
     }
 }
@@ -216,7 +216,7 @@ impl fmt::Display for FinishError {
 
 impl StdError for FinishError {
     fn cause(&self) -> Option<&dyn StdError> {
-        if let &FinishError::Io(ref e) = self {
+        if let FinishError::Io(e) = self {
             Some(e)
         } else {
             None
@@ -247,8 +247,8 @@ where
         Ok(Record {
             length: len,
             bytes_remaining: len,
-            header: header,
-            reader: reader,
+            header,
+            reader,
             marker: PhantomData,
             debug_info: DebugInfo::new(),
         })
@@ -302,15 +302,13 @@ where
         self.debug_info.set_consumed_tail();
         {
             let mut buf = [0u8; 4];
-            match self.reader.read_exact(&mut buf[..]) {
-                Err(e) => {
-                    if e.kind() == ::std::io::ErrorKind::UnexpectedEof {
-                        return Err(FinishError::MissingTail);
-                    }
-                    return Err(e.into());
+            if let Err(e) = self.reader.read_exact(&mut buf[..]) {
+                if e.kind() == ::std::io::ErrorKind::UnexpectedEof {
+                    return Err(FinishError::MissingTail);
                 }
-                Ok(_) => {}
+                return Err(e.into());
             }
+
             if &buf[..] != b"\r\n\r\n" {
                 return Err(FinishError::MissingTail);
             }

@@ -129,10 +129,7 @@ impl Header {
             fields.insert(field.name, field.value);
         }
 
-        Ok(Header {
-            version: version,
-            fields: fields,
-        })
+        Ok(Header { version, fields })
     }
 
     /// Get the value of a header field as bytes.
@@ -298,7 +295,7 @@ impl Field {
     pub fn new<S: AsRef<str>>(name: S, value: Vec<u8>) -> Field {
         Field {
             name: name.as_ref().to_lowercase(),
-            value: value,
+            value
         }
     }
 
@@ -360,7 +357,7 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError
     let mut header: Option<(usize, Header)> = None;
     {
         let buf = reader.fill_buf()?;
-        if buf.len() == 0 {
+        if buf.is_empty() {
             return Err(ParseError::NoMoreData);
         }
         if let Some(i) = find_crlf2(buf) {
@@ -410,7 +407,7 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError
             // taken ownership of yet.
             let match_idx = start_search + i;
             reader.consume(match_idx - bytes_consumed);
-            return Ok(Header::parse(&buf[..match_idx])?);
+            return Header::parse(&buf[..match_idx]);
         }
 
         // Otherwise keep looking

@@ -52,7 +52,7 @@ where
     pub fn new(log: L) -> Self {
         Self {
             digester: Default::default(),
-            log
+            log,
         }
     }
 
@@ -151,18 +151,15 @@ where
             // Parallelism requires either multiple files input, or a work queue that might be
             // derived from a cdx index or another worker just seeking through records and recording
             // their start points in a larger file.
-            match self
-                .log
-                .add(target.to_owned(), timestamp.to_owned(), digest)
+            if let Some((_, first_seen)) =
+                self.log
+                    .add(target.to_owned(), timestamp.to_owned(), digest)
             {
-                Some((_, first_seen)) => {
-                    println!("{} dup {} size {}", target, first_seen, len);
-                    // TODO write revisit record
-                }
-                None => {
-                    // Not a duplicate
-                    // TODO write record to output
-                }
+                println!("{} dup {} size {}", target, first_seen, len);
+                // TODO write revisit record
+            } else {
+                // Not a duplicate
+                // TODO write record to output
             }
         }
     }
