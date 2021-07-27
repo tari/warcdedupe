@@ -1,0 +1,39 @@
+[package]
+name = "warcdedupe"
+version = "0.1.0"
+edition = "2018"
+
+[[bin]]
+name = "warcdedupe"
+
+[lib]
+
+[features]
+default = []
+
+[dependencies]
+warcio = { path = "../warcio" }
+
+lazy_static = "1.0.0"
+log = "0.4.1"
+sha-1 = "0.9.7"
+
+# Command line handling
+docopt = "1.1.1"
+serde = "1.0.33"
+serde_derive = "1.0.33"
+
+# Reading and writing compressed WARCs
+flate2 = "1.0.20"
+
+[dev-dependencies]
+criterion = "0.3.4"
+
+[[bench]]
+name = "parser"
+harness = false
+
+[badges]
+travis-ci = { repository = "tari/warcdedupe" }
+maintenance = { status = "experimental" }
+

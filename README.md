@@ -5,7 +5,9 @@ rewritten to be revisit records pointing to the first instance of that response
 in the same file.
 
 Disclaimer: this tool doesn't currently do much that can be considered useful;
-it's both a prototype and a work in progress.
+it's both a prototype and a work in progress. In particular, while it is currently
+able to identify duplicate records in a WARC file it cannot output a new file with
+Revisit records replacing the originals.
 
 ## Future improvements
 

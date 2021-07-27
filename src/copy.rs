@@ -3,6 +3,8 @@ use std::io;
 use std::ptr;
 
 /// Copy from the src to dst file, from the current file offsets in each.
+// TODO replace with std::io::copy, which already knows how to use OS features
+// to do efficient copies.
 #[cfg(target_os="linux")]
 pub fn copy_file(src: &File, dst: &mut File, mut n_bytes: usize) -> io::Result<()> {
     use errno::errno;

@@ -89,6 +89,7 @@ where
 {
     /// The parsed record header.
     pub header: super::Header,
+    length: u64,
     bytes_remaining: u64,
     reader: R,
     marker: PhantomData<&'a mut R>,
@@ -244,12 +245,18 @@ where
         };
 
         Ok(Record {
+            length: len,
             bytes_remaining: len,
             header: header,
             reader: reader,
             marker: PhantomData,
             debug_info: DebugInfo::new(),
         })
+    }
+
+    /// Get the expected length of the record body.
+    pub fn len(&self) -> u64 {
+        self.length
     }
 
     /// Advance the input reader past this record's payload.
@@ -266,13 +273,7 @@ where
         self.finish_internal()?;
         // Manually deconstruct self to prevent the redundant drop but still
         // ensure members are dropped as necessary.
-        let Record {
-            header: _,
-            bytes_remaining: _,
-            reader: _,
-            marker: _,
-            debug_info: _,
-        } = self;
+        let Record { .. } = self;
 
         Ok(())
     }

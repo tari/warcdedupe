@@ -35,16 +35,10 @@
 
 #[cfg(feature = "chrono")]
 extern crate chrono;
-extern crate errno;
-extern crate failure;
 #[macro_use]
 extern crate lazy_static;
-extern crate libc;
-extern crate libflate;
 #[macro_use]
 extern crate log;
-extern crate regex;
-extern crate twoway;
 
 use regex::bytes::Regex;
 use std::collections::HashMap;
@@ -185,17 +179,12 @@ impl Header {
             .and_then(|s| str::parse::<u64>(s).ok())
     }
 
-    /// Get the WARC-Date field value.
+    /// Get the WARC-Date field value, parsed as a `DateTime`.
     ///
-    /// Returns `None` if the field is absent or does not represent a valid
-    /// `DateTime`. If you prefer to get this value as a string instead,
-    /// disable the `chrono` feature for this crate.
-    ///
-    /// This is a mandatory field, but in the interest of parsing leniency it
-    /// is not required to exist or have any particular value in order to parse
-    /// record header.
+    /// Equivalent to parsing the result of [warc_date] as a datetime in the
+    /// format dictated by the WARC specification.
     #[cfg(feature = "chrono")]
-    pub fn warc_date(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn warc_date_parsed(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         // YYYY-MM-DDThh:mm:ssZ per WARC-1.0. This is valid RFC3339, which is
         // itself valid ISO 8601. We're slightly lenient in accepting non-UTC
         // zone offsets.
@@ -207,14 +196,11 @@ impl Header {
 
     /// Get the WARC-Date field value.
     ///
-    /// Returns `None` if the field is absent or is not a valid string. If you
-    /// prefer to get this valid as a parsed datetime instead, enable the
-    /// `chrono` feature for this crate.
+    /// Returns `None` if the field is absent or is not a valid string.
     ///
     /// This is a mandatory field, but in the interest of parsing leniency it
     /// is not required to exist or have any particular value in order to parse
     /// record header.
-    #[cfg(not(feature = "chrono"))]
     pub fn warc_date(&self) -> Option<&str> {
         self.field_str("warc-date")
     }
@@ -358,7 +344,7 @@ impl Field {
 /// Parse a WARC record header out of the provided `BufRead`.
 ///
 /// Consumes the bytes that are parsed, leaving the reader at the beginning
-/// of the record payload. In case of an error in parsing some or all of the
+/// of the record payload. In case of an error in parsing, some or all of the
 /// input may be consumed.
 pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError> {
     /// Return the index of the first position in the given buffer following
