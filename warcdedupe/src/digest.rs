@@ -1,4 +1,3 @@
-use sha1::{Digest, Sha1};
 use warcio::Header;
 
 pub trait Digester: Sized {
@@ -11,34 +10,28 @@ pub trait Digester: Sized {
     fn finalize(self) -> Self::Digest;
 }
 
-// TODO consider using BLAKE3: it's super-fast and more secure
-pub struct UrlLengthSha1Digester {
+pub struct UrlLengthBlake3Digester {
     length: u64,
     url: String,
-    sha1: Sha1,
+    hasher: blake3::Hasher,
 }
 
-impl Digester for UrlLengthSha1Digester {
-    type Digest = (String, u64, [u8; 20]);
+impl Digester for UrlLengthBlake3Digester {
+    type Digest = (String, u64, [u8; blake3::OUT_LEN]);
 
     fn new(x: &Header) -> Option<Self> {
         Some(Self {
             length: x.content_length()?,
             url: x.field_str("warc-target-uri")?.to_owned(),
-            sha1: Sha1::new(),
+            hasher: blake3::Hasher::new(),
         })
     }
 
     fn handle_data(&mut self, data: &[u8]) {
-        self.sha1.update(data);
+        self.hasher.update(data);
     }
 
     fn finalize(self) -> Self::Digest {
-        // Convert GenericArray<20> to an actual array since we can't really write
-        // the generic type.
-        let mut fixed = [0u8; 20];
-        fixed.copy_from_slice(self.sha1.finalize().as_slice());
-
-        (self.url, self.length, fixed)
+        (self.url, self.length, *self.hasher.finalize().as_bytes())
     }
 }

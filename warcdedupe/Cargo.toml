@@ -16,7 +16,7 @@ warcio = { path = "../warcio" }
 
 lazy_static = "1.0.0"
 log = "0.4.1"
-sha-1 = "0.9.7"
+blake3 = "1.0.0"
 
 # Command line handling
 docopt = "1.1.1"

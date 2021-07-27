@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use docopt::Docopt;
 use flate2::read::MultiGzDecoder;
 
-use warcdedupe::digest::UrlLengthSha1Digester;
+use warcdedupe::digest::UrlLengthBlake3Digester;
 use warcdedupe::response_log::InMemoryResponseLog;
 use warcdedupe::Deduplicator;
 
@@ -107,7 +107,7 @@ fn main() {
     let output = open_output_stream(args.arg_outfile, args.flag_compress_output);
 
     let mut deduplicator =
-        Deduplicator::<UrlLengthSha1Digester, _>::new(InMemoryResponseLog::new());
+        Deduplicator::<UrlLengthBlake3Digester, _>::new(InMemoryResponseLog::new());
 
     deduplicator.read(input);
 }
