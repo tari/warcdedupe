@@ -4,7 +4,6 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::io::prelude::*;
 use std::io::Error as IoError;
-use std::marker::PhantomData;
 use std::ops::Drop;
 
 /// The number of bytes to skip per read() call when closing a record.
@@ -70,29 +69,73 @@ impl fmt::Display for InvalidRecord {
     }
 }
 
+/// The supported methods of compressing a single [`Record`].
+pub enum Compression {
+    None,
+    Gzip,
+}
+
+#[derive(Debug)]
+enum Input<R>
+where
+    R: BufRead,
+{
+    Plain(R),
+    Compressed(std::io::BufReader<flate2::bufread::GzDecoder<R>>),
+}
+
+impl<R> Read for Input<R>
+where
+    R: BufRead,
+{
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Input::Plain(r) => r.read(buf),
+            Input::Compressed(r) => r.read(buf),
+        }
+    }
+}
+
+impl<R> BufRead for Input<R>
+where
+    R: BufRead,
+{
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        match self {
+            Input::Plain(r) => r.fill_buf(),
+            Input::Compressed(r) => r.fill_buf(),
+        }
+    }
+
+    fn consume(&mut self, amt: usize) {
+        match self {
+            Input::Plain(r) => r.consume(amt),
+            Input::Compressed(r) => r.consume(amt),
+        }
+    }
+}
+
 /// A streaming WARC record.
 ///
-/// The header of the record is accessible via the `header` method, and its
-/// payload is accessible through the `Read` impl.
+/// The header of the record is accessible via the [`Self::header`] method, and its
+/// payload is accessible through the [`Read`] impl.
 ///
-/// When done reading the payload, call `finish` to advance the underlying
+/// When done reading the payload, call [`Self::finish`] to advance the underlying
 /// reader past this record. This also automatically happens when the record
-/// is dropped, but the `Drop` impl will panic on error so you should
-/// explicitly call `finish` if you wish to handle I/O errors at that point.
-// Efficient seeking if we have an uncompressed file or compressed file with
-// CDX index is impossible here. We'll need a BufRead-like trait to cover
-// those.
+/// is dropped, but the [`Drop`] impl will panic on error so you should
+/// explicitly call [`Self::finish`] if you wish to handle I/O errors at that point.
 #[derive(Debug)]
-pub struct Record<'a, R>
+pub struct Record<R>
 where
-    R: 'a + BufRead,
+    R: BufRead,
 {
     /// The parsed record header.
     pub header: super::Header,
-    length: u64,
+    /// The record Content-Length in bytes
+    content_length: u64,
+    /// The number of bytes left to read in the record body
     bytes_remaining: u64,
-    reader: R,
-    marker: PhantomData<&'a mut R>,
+    input: Input<R>,
     debug_info: DebugInfo,
 }
 
@@ -134,9 +177,10 @@ impl DebugInfo {
     fn set_consumed_tail(&mut self) {}
 }
 
-impl<'a, R> Read for Record<'a, R>
+/// Read data from the record body.
+impl<R> Read for Record<R>
 where
-    R: 'a + BufRead,
+    R: BufRead,
 {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         let constrained = if (buf.len() as u64) > self.bytes_remaining {
@@ -145,18 +189,19 @@ where
             buf
         };
 
-        let n = self.reader.read(constrained)?;
+        let n = self.input.read(constrained)?;
         self.bytes_remaining -= n as u64;
         Ok(n)
     }
 }
 
-impl<'a, R> BufRead for Record<'a, R>
+/// Read data from the record body, using the underlying input's buffer.
+impl<R> BufRead for Record<R>
 where
-    R: 'a + BufRead,
+    R: BufRead,
 {
     fn fill_buf(&mut self) -> Result<&[u8], IoError> {
-        let buf = self.reader.fill_buf()?;
+        let buf = self.input.fill_buf()?;
         let remaining = self.bytes_remaining as usize;
         let out = if buf.len() > remaining {
             &buf[..remaining]
@@ -169,15 +214,15 @@ where
     }
 
     fn consume(&mut self, n: usize) {
-        assert!(n <= self.bytes_remaining as usize);
-        self.reader.consume(n);
+        debug_assert!(n <= self.bytes_remaining as usize);
+        self.input.consume(n);
         self.bytes_remaining -= n as u64;
     }
 }
 
-impl<'a, R> Drop for Record<'a, R>
+impl<R> Drop for Record<R>
 where
-    R: 'a + BufRead,
+    R: BufRead,
 {
     fn drop(&mut self) {
         if let Err(e) = self.finish_internal() {
@@ -224,39 +269,46 @@ impl StdError for FinishError {
     }
 }
 
-impl<'a, R> Record<'a, R>
+impl<R> Record<R>
 where
-    R: 'a + BufRead,
+    R: BufRead,
 {
     /// Read a record from an input stream.
     ///
     /// Because the record ensures the input is advanced past the payload when
     /// it goes out of scope, the reader is inaccessible as long as the record
     /// is live if a reference is provided.
-    pub fn read_from(mut reader: R) -> Result<Self, InvalidRecord> {
-        let header = super::get_record_header(&mut reader)?;
+    pub fn read_from(reader: R, compression: Compression) -> Result<Self, InvalidRecord> {
+        let mut input = match compression {
+            Compression::None => Input::Plain(reader),
+            // TODO an option to specify the buffer size could be useful
+            Compression::Gzip => Input::Compressed(std::io::BufReader::new(
+                flate2::bufread::GzDecoder::new(reader),
+            )),
+        };
+
+        let header = super::get_record_header(&mut input)?;
         let len = match header.content_length() {
             None => {
                 return Err(InvalidRecord::UnknownLength(
-                    header.field("content-length").map(|bytes| bytes.to_vec()),
+                    header.field("Content-Length").map(|bytes| bytes.to_vec()),
                 ))
             }
             Some(n) => n,
         };
 
         Ok(Record {
-            length: len,
+            content_length: len,
             bytes_remaining: len,
             header,
-            reader,
-            marker: PhantomData,
+            input,
             debug_info: DebugInfo::new(),
         })
     }
 
     /// Get the expected length of the record body.
     pub fn len(&self) -> u64 {
-        self.length
+        self.content_length
     }
 
     /// Advance the input reader past this record's payload.
@@ -295,14 +347,14 @@ where
 
         while remaining > 0 {
             let n = cmp::min(buf.len(), remaining as usize);
-            self.reader.read_exact(&mut buf[..n])?;
+            self.input.read_exact(&mut buf[..n])?;
             remaining -= n as u64;
         }
 
         self.debug_info.set_consumed_tail();
         {
             let mut buf = [0u8; 4];
-            if let Err(e) = self.reader.read_exact(&mut buf[..]) {
+            if let Err(e) = self.input.read_exact(&mut buf[..]) {
                 if e.kind() == ::std::io::ErrorKind::UnexpectedEof {
                     return Err(FinishError::MissingTail);
                 }

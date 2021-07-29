@@ -31,7 +31,6 @@
 //! quoted-pair = "\" CHAR
 //! uri = <'URI' per RFC3986>
 //! ```
-#![deny(missing_docs)]
 
 #[cfg(feature = "chrono")]
 extern crate chrono;
@@ -44,13 +43,13 @@ use regex::bytes::Regex;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::str::{self, FromStr};
+use uncased::{Uncased, UncasedStr};
 
-//mod copy;
-//mod file;
-/// Reading WARC records from files or streams.
-pub mod reader;
+mod record;
 #[cfg(test)]
 mod tests;
+
+pub use record::*;
 
 /// Reasons it may be impossible to parse a WARC header.
 #[derive(Debug)]
@@ -111,7 +110,7 @@ impl From<std::io::Error> for ParseError {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Header {
     version: Version,
-    fields: HashMap<String, Vec<u8>>,
+    fields: HashMap<Uncased<'static>, Vec<u8>>,
 }
 
 impl Header {
@@ -134,18 +133,18 @@ impl Header {
 
     /// Get the value of a header field as bytes.
     ///
-    /// Returns None if there is no such field. *The field name is
-    /// case-sensitive* and normalized to lower-case.
-    pub fn field(&self, name: &str) -> Option<&[u8]> {
-        self.fields.get(name).map(Vec::as_slice)
+    /// Returns None if there is no such field. The field name is
+    /// case-insensitive.
+    pub fn field<S: AsRef<str>>(&self, name: S) -> Option<&[u8]> {
+        self.fields.get(UncasedStr::new(name.as_ref())).map(Vec::as_slice)
     }
 
     /// Get the value of a header field as a string.
     ///
     /// Returns None if there is no such field or its value is not a valid
-    /// string. *The field name is case-sensitive* and normalized to lower-case.
-    pub fn field_str(&self, name: &str) -> Option<&str> {
-        self.field(name).and_then(|b| str::from_utf8(b).ok())
+    /// string. The field name is case-insensitive.
+    pub fn field_str<S: AsRef<str>>(&self, name: S) -> Option<&str> {
+        self.field(UncasedStr::new(name.as_ref())).and_then(|b| str::from_utf8(b).ok())
     }
 
     /// Get the WARC-Record-ID field value.
@@ -160,7 +159,7 @@ impl Header {
     /// record ID is specified to be a RFC 3986 URI, which are always valid
     /// ASCII (and therefore UTF-8) strings when well-formed.
     pub fn record_id(&self) -> Option<&str> {
-        self.field_str("warc-record-id")
+        self.field_str("WARC-Record-ID")
     }
 
     /// Get the Content-Length field value.
@@ -172,7 +171,7 @@ impl Header {
     /// is not required to exist or have any particular value in order to parse
     /// a record header.
     pub fn content_length(&self) -> Option<u64> {
-        self.field_str("content-length")
+        self.field_str("Content-Length")
             .and_then(|s| str::parse::<u64>(s).ok())
     }
 
@@ -186,7 +185,7 @@ impl Header {
         // itself valid ISO 8601. We're slightly lenient in accepting non-UTC
         // zone offsets.
         use chrono::{DateTime, Utc};
-        self.field_str("warc-date")
+        self.field_str("WARC-Date")
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc))
     }
@@ -199,7 +198,7 @@ impl Header {
     /// is not required to exist or have any particular value in order to parse
     /// record header.
     pub fn warc_date(&self) -> Option<&str> {
-        self.field_str("warc-date")
+        self.field_str("WARC-Date")
     }
 
     /// Get the WARC-Type field value.
@@ -224,7 +223,7 @@ impl Header {
     /// extensions are encouraged by the standard to discuss their intentions
     /// within the IIPC.
     pub fn warc_type(&self) -> Option<&str> {
-        self.field_str("warc-type")
+        self.field_str("WARC-Type")
     }
 }
 
@@ -286,16 +285,16 @@ impl Version {
 /// a map inside the record header.
 #[derive(Debug, PartialEq, Eq)]
 struct Field {
-    name: String,
+    name: Uncased<'static>,
     value: Vec<u8>,
 }
 
 impl Field {
     /// Construct a field with the given name and value.
-    pub fn new<S: AsRef<str>>(name: S, value: Vec<u8>) -> Field {
+    pub fn new<S: Into<String>>(name: S, value: Vec<u8>) -> Field {
         Field {
-            name: name.as_ref().to_lowercase(),
-            value
+            name: Uncased::new(name.into()),
+            value,
         }
     }
 

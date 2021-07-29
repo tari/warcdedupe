@@ -8,7 +8,7 @@ fn can_read_record_header() {
                    X-Multiline-Test:lol \r\n  multiline headers\r\n\
                    \r\n";
 
-    let mut fields: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut fields: HashMap<Uncased<'static>, Vec<u8>> = HashMap::new();
     fields.insert("warc-type".into(), b"testdata".to_vec());
     fields.insert("content-length".into(), b"6".to_vec());
     fields.insert("x-multiline-test".into(), b"lol multiline headers".to_vec());
