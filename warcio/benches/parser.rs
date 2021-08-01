@@ -58,7 +58,6 @@ fn get_record_header_windows<R: BufRead>(mut reader: R) -> Result<Header, ParseE
         // Copy out of the reader
         buf.extend(reader.fill_buf()?);
         if buf.len() == bytes_consumed {
-            debug!("Record header read hit EOF without finding CRLF2 after {} bytes", bytes_consumed);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "WARC header not terminated",
@@ -103,7 +102,7 @@ fn bench_get_record_header(c: &mut Criterion) {
     let windows = Fun::new("Windows", |b, _| {
         b.iter(|| get_record_header_windows(DATA).unwrap())
     });
-    let twoway = Fun::new("Twoway", |b, _| b.iter(|| get_record_header(DATA).unwrap()));
+    let memchr = Fun::new("memchr", |b, _| b.iter(|| get_record_header(DATA).unwrap()));
 
-    c.bench_functions("get_record_header", vec![windows, twoway], 0);
+    c.bench_functions("get_record_header", vec![windows, memchr], 0);
 }

@@ -83,9 +83,9 @@ impl Digester for UrlLengthBlake3Digester {
 
         let expected_len = digest.2.len() * 2 + 7;
         let mut out = String::with_capacity(expected_len);
-        write!(&mut out, "blake3:");
+        let _ = write!(&mut out, "blake3:");
         for byte in digest.2 {
-            write!(&mut out, "{:02x}", byte);
+            let _ = write!(&mut out, "{:02x}", byte);
         }
 
         debug_assert_eq!(

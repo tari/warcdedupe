@@ -718,16 +718,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "twoway"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c57ffb460d7c24cd6eda43694110189030a3d1dfe418416d9468fd1c1d290b47"
-dependencies = [
- "memchr",
- "unchecked-index",
-]
-
-[[package]]
 name = "typenum"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -741,12 +731,6 @@ checksum = "5baeed7327e25054889b9bd4f975f32e5f4c5d434042d59ab6cd4142c0a76ed0"
 dependencies = [
  "version_check",
 ]
-
-[[package]]
-name = "unchecked-index"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eeba86d422ce181a719445e51872fa30f1f7413b62becb52e95ec91aa262d85c"
 
 [[package]]
 name = "unicode-width"
@@ -782,7 +766,6 @@ name = "warcdedupe"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "criterion",
  "docopt",
  "flate2",
  "httparse",
@@ -801,11 +784,12 @@ name = "warcio"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "criterion",
  "flate2",
  "lazy_static",
  "log",
+ "memchr",
  "regex",
- "twoway",
  "uncased",
 ]
 

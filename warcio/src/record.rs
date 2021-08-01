@@ -384,11 +384,15 @@ where
         // that the reader advances past the gzip trailer so a user won't trip over them when
         // trying to resume reading another record following this one.
         if let Input::Compressed(ref mut input) = self.input {
-            while let n = input.fill_buf()?.len() {
+            loop {
+                let n = input.fill_buf()?.len();
                 if n == 0 {
                     break;
                 }
-                trace!("compressed record finish consuming {} extra bytes", buf.len());
+                trace!(
+                    "compressed record finish consuming {} extra bytes",
+                    buf.len()
+                );
                 input.consume(n);
             }
         }

@@ -4,8 +4,8 @@ extern crate lazy_static;
 extern crate serde_derive;
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write, Cursor};
-use std::path::{Path, PathBuf};
+use std::io::{BufReader, Cursor, Write};
+use std::path::PathBuf;
 
 use docopt::Docopt;
 use warcio::Compression;
@@ -45,21 +45,14 @@ fn maybe_file(o: Option<PathBuf>) -> Option<PathBuf> {
     o.and_then(|p| if p.as_os_str() == "-" { None } else { Some(p) })
 }
 
-fn file_is_gzip(p: &Path) -> bool {
-    p.extension().map(|ext| ext == "gz").unwrap_or(false)
-}
-
-// Lazy statics for stdio because we lock them to help ensure no accidental use
-// otherwise.
-lazy_static! {
-    static ref STDIN: std::io::Stdin = std::io::stdin();
-    static ref STDOUT: std::io::Stdout = std::io::stdout();
-}
-
 fn open_output_stream(p: Option<PathBuf>) -> Box<dyn Write> {
     if let Some(p) = maybe_file(p) {
         Box::new(File::create(&p).expect("Failed to create output file"))
     } else {
+        // Locking stdout takes a ref to the instance, so it must be static
+        lazy_static! {
+            static ref STDOUT: std::io::Stdout = std::io::stdout();
+        }
         Box::new(STDOUT.lock())
     }
 }
@@ -73,11 +66,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let input_compression = Compression::guess_for_filename(&args.arg_infile);
     let input_file = std::fs::File::open(args.arg_infile)?;
-    let output_compression = args.arg_outfile.as_ref().map(Compression::guess_for_filename).unwrap_or(Compression::None);
+    let output_compression = args
+        .arg_outfile
+        .as_ref()
+        .map(Compression::guess_for_filename)
+        .unwrap_or(Compression::None);
     let output = open_output_stream(args.arg_outfile);
 
-    let mut deduplicator =
-        Deduplicator::<UrlLengthBlake3Digester, _, _>::new(output, InMemoryResponseLog::new(), output_compression);
+    let mut deduplicator = Deduplicator::<UrlLengthBlake3Digester, _, _>::new(
+        output,
+        InMemoryResponseLog::new(),
+        output_compression,
+    );
 
     if args.flag_disable_mmap {
         deduplicator.read(BufReader::with_capacity(16, input_file), input_compression)
@@ -85,16 +85,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let input_map = unsafe { memmap2::Mmap::map(&input_file)? };
         // We do sequential access, so advise the OS of that where such a mechanism exists.
         #[cfg(unix)]
-            unsafe {
+        unsafe {
             use nix::sys::mman::{madvise, MmapAdvise};
-            madvise(
+            let _ = madvise(
                 input_map.as_ptr() as *mut _,
                 input_map.len(),
                 MmapAdvise::MADV_SEQUENTIAL,
             );
         }
         deduplicator.read(Cursor::new(&input_map), input_compression)
-    }.unwrap();
+    }
+    .unwrap();
 
     Ok(())
 }

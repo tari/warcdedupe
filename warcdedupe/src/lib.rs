@@ -203,7 +203,10 @@ where
         compression: warcio::Compression,
     ) -> Result<(), ProcessError> {
         let start_offset = input.stream_position()?;
-        trace!("Deduplicator start record read from input offset {}", start_offset);
+        trace!(
+            "Deduplicator start record read from input offset {}",
+            start_offset
+        );
         let mut record = warcio::Record::read_from(&mut input, compression)?;
 
         if self.process_record(&mut record)? == ProcessOutcome::NeedsCopy {
@@ -213,10 +216,15 @@ where
             // TODO correctness depends on the record never over-reading so end_offset is accurate
             drop(record);
             let end_offset = input.stream_position()?;
-            input.seek(std::io::SeekFrom::Start(start_offset));
+            input.seek(std::io::SeekFrom::Start(start_offset))?;
             let mut raw_record = input.take(end_offset - start_offset);
 
-            trace!("Copy {} bytes to output, transform {:?} -> {:?}", end_offset - start_offset, compression, self.output_compression);
+            trace!(
+                "Copy {} bytes to output, transform {:?} -> {:?}",
+                end_offset - start_offset,
+                compression,
+                self.output_compression
+            );
             match (compression, self.output_compression) {
                 (Compression::None, Compression::None) | (Compression::Gzip, Compression::Gzip) => {
                     std::io::copy(&mut raw_record, &mut self.output)?

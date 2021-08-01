@@ -427,7 +427,12 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError
     /// a b"\r\n\r\n" sequence.
     #[inline]
     fn find_crlf2(buf: &[u8]) -> Option<usize> {
-        twoway::find_bytes(buf, b"\r\n\r\n").map(|i| i + 4)
+        use memchr::memmem::Finder;
+        lazy_static! {
+            static ref SEARCHER: Finder<'static> = Finder::new(b"\r\n\r\n");
+        }
+
+        SEARCHER.find(buf).map(|i| i + 4)
     }
 
     // Read bytes out of the input reader until we find the end of the header
