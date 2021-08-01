@@ -4,11 +4,11 @@ extern crate lazy_static;
 extern crate serde_derive;
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write, Cursor};
 use std::path::{Path, PathBuf};
 
 use docopt::Docopt;
-use flate2::read::MultiGzDecoder;
+use warcio::Compression;
 
 use warcdedupe::digest::UrlLengthBlake3Digester;
 use warcdedupe::response_log::InMemoryResponseLog;
@@ -18,27 +18,26 @@ const USAGE: &str = "
 WARC deduplicator.
 
 Usage:
-  warcdedupe [options] [<infile>] [<outfile>]
+  warcdedupe [options] <infile> [<outfile>]
 
 If infile or outfile is not specified or is '-', read from standard input or
 write to standard output.
 
 Options:
   -h --help             Show this help.
-  --compressed-input    Assume records in non-file input are compressed.
   --compress-output     Write compressed records to non-file output.
+  --disable-mmap        Never memory-map the input file, even if possible.
 
-When input or output is a file, the --compressed-input and --compress-output
-options are ignored each is assumed to be compressed if the file name ends in
-'.gz'.
+When output is a file, the --compress-output option is ignored. Input and
+output files are assumed to be compressed if the file name ends in '.gz'.
 ";
 
 #[derive(Debug, Deserialize)]
 struct Args {
-    arg_infile: Option<PathBuf>,
+    arg_infile: PathBuf,
     arg_outfile: Option<PathBuf>,
-    flag_compressed_input: bool,
     flag_compress_output: bool,
+    flag_disable_mmap: bool,
 }
 
 /// Transform "-" into None to use stdio instead of a file.
@@ -57,57 +56,45 @@ lazy_static! {
     static ref STDOUT: std::io::Stdout = std::io::stdout();
 }
 
-fn open_input_stream(p: Option<PathBuf>, compressed_stream: bool) -> Box<dyn BufRead> {
+fn open_output_stream(p: Option<PathBuf>) -> Box<dyn Write> {
     if let Some(p) = maybe_file(p) {
-        // From file
-        let file = BufReader::new(File::open(&p).expect("Failed to open input file"));
-
-        if file_is_gzip(&p) {
-            Box::new(BufReader::new(MultiGzDecoder::new(file)))
-        } else {
-            Box::new(file)
-        }
+        Box::new(File::create(&p).expect("Failed to create output file"))
     } else {
-        // From stdin
-        if compressed_stream {
-            Box::new(BufReader::new(MultiGzDecoder::new(STDIN.lock())))
-        } else {
-            Box::new(STDIN.lock())
-        }
+        Box::new(STDOUT.lock())
     }
 }
 
-// TODO we need to write with record granularity too, need a custom trait.
-fn open_output_stream(p: Option<PathBuf>, compress_stream: bool) -> Box<dyn Write> {
-    if let Some(p) = maybe_file(p) {
-        // To file
-        let file = File::create(&p).expect("Failed to create output file");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    pretty_env_logger::init_custom_env("WARCDEDUPE_LOG");
 
-        if file_is_gzip(&p) {
-            unimplemented!();
-        } else {
-            Box::new(file)
-        }
-    } else {
-        // To stdout
-        if compress_stream {
-            unimplemented!();
-        } else {
-            Box::new(STDOUT.lock())
-        }
-    }
-}
-
-fn main() {
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.deserialize())
         .unwrap_or_else(|e| e.exit());
 
-    let input = open_input_stream(args.arg_infile, args.flag_compressed_input);
-    let output = open_output_stream(args.arg_outfile, args.flag_compress_output);
+    let input_compression = Compression::guess_for_filename(&args.arg_infile);
+    let input_file = std::fs::File::open(args.arg_infile)?;
+    let output_compression = args.arg_outfile.as_ref().map(Compression::guess_for_filename).unwrap_or(Compression::None);
+    let output = open_output_stream(args.arg_outfile);
 
     let mut deduplicator =
-        Deduplicator::<UrlLengthBlake3Digester, _>::new(InMemoryResponseLog::new());
+        Deduplicator::<UrlLengthBlake3Digester, _, _>::new(output, InMemoryResponseLog::new(), output_compression);
 
-    deduplicator.read(input);
+    if args.flag_disable_mmap {
+        deduplicator.read(BufReader::with_capacity(16, input_file), input_compression)
+    } else {
+        let input_map = unsafe { memmap2::Mmap::map(&input_file)? };
+        // We do sequential access, so advise the OS of that where such a mechanism exists.
+        #[cfg(unix)]
+            unsafe {
+            use nix::sys::mman::{madvise, MmapAdvise};
+            madvise(
+                input_map.as_ptr() as *mut _,
+                input_map.len(),
+                MmapAdvise::MADV_SEQUENTIAL,
+            );
+        }
+        deduplicator.read(Cursor::new(&input_map), input_compression)
+    }.unwrap();
+
+    Ok(())
 }

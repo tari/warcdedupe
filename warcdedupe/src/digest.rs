@@ -1,4 +1,5 @@
-use warcio::Header;
+use std::io::BufRead;
+use warcio::{Header, Record};
 
 pub trait Digester: Sized {
     type Digest;
@@ -6,12 +7,54 @@ pub trait Digester: Sized {
     /// Create a new digester, or return None if the record is not eligible
     /// for deduplication.
     fn new(x: &Header) -> Option<Self>;
+    /// Collect data from a record body and accumulate it into the digest.
     fn handle_data(&mut self, data: &[u8]);
+    /// Compute the final digest from the initial state and any accumulated
+    /// data.
     fn finalize(self) -> Self::Digest;
+
+    /// Write a digest to the provided writer as a `labelled-digest` as specified
+    /// by WARC 1.1 section 5.8.
+    fn format_digest(digest: &Self::Digest) -> String;
+
+    /// Compute the digest of a record and return the digest, or None if the record is not
+    /// eligible for deduplication (according to [`Self::new`]).
+    fn digest_record<Input: BufRead>(
+        record: &mut Record<Input>,
+    ) -> std::io::Result<Option<Self::Digest>> {
+        let mut digester = match Self::new(&record.header) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        loop {
+            // Digest chunks of the record based on the underlying buffer.
+            // This avoids extra copies from its buffer into one of ours and allows
+            // the caller to control how much data gets loaded into memory here by
+            // setting the input's buffer size.
+            let n = {
+                let buf = record.fill_buf()?;
+                if buf.is_empty() {
+                    // Reached end of record
+                    break;
+                }
+                digester.handle_data(&buf);
+                buf.len()
+            };
+            record.consume(n);
+        }
+        Ok(Some(digester.finalize()))
+    }
 }
 
+/// A digester that keys on the source URL, record length and BLAKE3 hash
+/// of the record contents.
 pub struct UrlLengthBlake3Digester {
     length: u64,
+    // TODO probably don't want this to unnecessarily limit matches:
+    // WARC-Refers-To-Target-URI is not required for revisit records and
+    // "it is not necessary that the URI of the original capture and the revisit be
+    // identical" (6.7.2).
     url: String,
     hasher: blake3::Hasher,
 }
@@ -22,7 +65,7 @@ impl Digester for UrlLengthBlake3Digester {
     fn new(x: &Header) -> Option<Self> {
         Some(Self {
             length: x.content_length()?,
-            url: x.field_str("warc-target-uri")?.to_owned(),
+            url: x.field_str("WARC-Target-URI")?.to_owned(),
             hasher: blake3::Hasher::new(),
         })
     }
@@ -33,5 +76,23 @@ impl Digester for UrlLengthBlake3Digester {
 
     fn finalize(self) -> Self::Digest {
         (self.url, self.length, *self.hasher.finalize().as_bytes())
+    }
+
+    fn format_digest(digest: &Self::Digest) -> String {
+        use std::fmt::Write;
+
+        let expected_len = digest.2.len() * 2 + 7;
+        let mut out = String::with_capacity(expected_len);
+        write!(&mut out, "blake3:");
+        for byte in digest.2 {
+            write!(&mut out, "{:02x}", byte);
+        }
+
+        debug_assert_eq!(
+            out.len(),
+            expected_len,
+            "string should not need reallocation"
+        );
+        out
     }
 }

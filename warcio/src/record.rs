@@ -5,6 +5,7 @@ use std::fmt;
 use std::io::prelude::*;
 use std::io::Error as IoError;
 use std::ops::Drop;
+use std::path::Path;
 
 /// The number of bytes to skip per read() call when closing a record.
 ///
@@ -70,9 +71,19 @@ impl fmt::Display for InvalidRecord {
 }
 
 /// The supported methods of compressing a single [`Record`].
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Compression {
     None,
     Gzip,
+}
+
+impl Compression {
+    pub fn guess_for_filename<P: AsRef<Path>>(path: P) -> Compression {
+        match path.as_ref().extension() {
+            Some(ext) if ext == "gz" => Compression::Gzip,
+            _ => Compression::None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -124,6 +135,9 @@ where
 /// reader past this record. This also automatically happens when the record
 /// is dropped, but the [`Drop`] impl will panic on error so you should
 /// explicitly call [`Self::finish`] if you wish to handle I/O errors at that point.
+///
+/// The input stream is guaranteed to have been read to the end of the record, including to
+/// the end of the compressed stream if the input is gzipped, when the record is finished.
 #[derive(Debug)]
 pub struct Record<R>
 where
@@ -366,6 +380,61 @@ where
             }
         }
 
+        // Advance the input to the very end of the compressed stream if compressed; this ensures
+        // that the reader advances past the gzip trailer so a user won't trip over them when
+        // trying to resume reading another record following this one.
+        if let Input::Compressed(ref mut input) = self.input {
+            while let n = input.fill_buf()?.len() {
+                if n == 0 {
+                    break;
+                }
+                trace!("compressed record finish consuming {} extra bytes", buf.len());
+                input.consume(n);
+            }
+        }
+
         Ok(())
+    }
+}
+
+pub(crate) struct RecordWriter<W> {
+    limit: u64,
+    written: u64,
+    writer: W,
+}
+
+impl<W> RecordWriter<W> {
+    pub fn new(writer: W, content_length: u64) -> Self {
+        RecordWriter {
+            limit: content_length,
+            written: 0,
+            writer,
+        }
+    }
+}
+
+impl<W: Write> Write for RecordWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        debug_assert!(self.written <= self.limit);
+        let take = std::cmp::min(buf.len() as u64, self.limit - self.written);
+
+        let written = self.writer.write(&buf[..take as usize])?;
+        self.written += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl<W> Drop for RecordWriter<W> {
+    fn drop(&mut self) {
+        if self.written < self.limit {
+            error!(
+                "record contents wrote only {} bytes but expected {}",
+                self.written, self.limit
+            );
+        }
     }
 }

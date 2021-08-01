@@ -58,6 +58,7 @@ fn get_record_header_windows<R: BufRead>(mut reader: R) -> Result<Header, ParseE
         // Copy out of the reader
         buf.extend(reader.fill_buf()?);
         if buf.len() == bytes_consumed {
+            debug!("Record header read hit EOF without finding CRLF2 after {} bytes", bytes_consumed);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "WARC header not terminated",
