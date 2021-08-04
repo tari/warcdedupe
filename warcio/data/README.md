@@ -36,6 +36,6 @@ Baz = baz
 
 The generated code provides an implementation of `std::convert::From` that
 takes string-like values and returns an enum value (`Foo` in this example),
-and implements `std::fmt::Display` for the enum type, mapping each variant
+and implements `AsRef<str>` for the enum type, mapping each variant
 back to its canonical string representation (or the contained string for
 the catchall variant).
