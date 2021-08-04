@@ -4,7 +4,7 @@ extern crate log;
 use std::io::{BufRead, Error, Seek, Write};
 
 use response_log::ResponseLog;
-use warcio::{Compression, InvalidRecord};
+use warcio::record::{Compression, InvalidRecord, Record};
 
 use crate::digest::Digester;
 use flate2::bufread::GzDecoder;
@@ -41,7 +41,7 @@ where
 
     fn process_record<R: BufRead>(
         &mut self,
-        record: &mut warcio::Record<R>,
+        record: &mut Record<R>,
     ) -> Result<ProcessOutcome, ProcessError> {
         use ProcessOutcome::NeedsCopy;
 
@@ -70,6 +70,7 @@ where
 
         // For HTTP responses, we'll only digest the response body and ignore headers as
         // specified by WARC 1.1 6.3.2 and RFC 2616.
+        // TODO application/http alone is also okay
         let content_is_http_response = record.header.field_str("Content-Type").unwrap_or("")
             == "application/http;msgtype=response";
         let uri_is_http = record
@@ -159,18 +160,10 @@ where
         );
 
         // At this point we've found a record with matching digest to deduplicate against.
-        // We'll create a new revisit record to emit, using the same record ID, date, and target URI
-        // values as the original.
-        let mut dedup_headers = warcio::Header::new(1, 1);
-        if let Some(id) = record.header.record_id() {
-            dedup_headers.set_field("WARC-Record-ID", id);
-        }
-        if let Some(date) = record.header.warc_date() {
-            dedup_headers.set_field("WARC-Date", date);
-        }
-        if let Some(uri) = record.header.field_uri("WARC-Target-URI") {
-            dedup_headers.set_field("WARC-Target-URI", uri);
-        }
+        // We'll create a new revisit record to emit, starting by copying the fields from the
+        // original record then updating various fields.
+        // TODO clone header names but convert to WARC 1.1 (including translating URIs)
+        let mut dedup_headers = record.header.clone();
         // We're emitting a revisit record according to WARC 1.1, based on an identical
         // payload digest.
         dedup_headers.set_field("WARC-Type", "revisit");
@@ -200,20 +193,19 @@ where
     pub fn read<R: BufRead + Seek>(
         &mut self,
         mut input: R,
-        compression: warcio::Compression,
+        compression: Compression,
     ) -> Result<(), ProcessError> {
         let start_offset = input.stream_position()?;
         trace!(
             "Deduplicator start record read from input offset {}",
             start_offset
         );
-        let mut record = warcio::Record::read_from(&mut input, compression)?;
+        let mut record = Record::read_from(&mut input, compression)?;
 
         if self.process_record(&mut record)? == ProcessOutcome::NeedsCopy {
             // Not a duplicate. Drop the record to regain access to the raw input so we can
             // copy the raw record data with std::io::copy, taking advantage of OS-level copy
             // acceleration like copy_file_range(2) or sendfile(2).
-            // TODO correctness depends on the record never over-reading so end_offset is accurate
             drop(record);
             let end_offset = input.stream_position()?;
             input.seek(std::io::SeekFrom::Start(start_offset))?;
@@ -250,7 +242,7 @@ enum ProcessOutcome {
 
 #[derive(Debug)]
 pub enum ProcessError {
-    InvalidRecord(warcio::InvalidRecord),
+    InvalidRecord(InvalidRecord),
     IoError(std::io::Error),
 }
 
@@ -260,7 +252,7 @@ impl From<std::io::Error> for ProcessError {
     }
 }
 
-impl From<warcio::InvalidRecord> for ProcessError {
+impl From<InvalidRecord> for ProcessError {
     fn from(e: InvalidRecord) -> Self {
         ProcessError::InvalidRecord(e)
     }

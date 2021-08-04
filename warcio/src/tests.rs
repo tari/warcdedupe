@@ -1,4 +1,5 @@
-use super::*;
+use crate::header::{Field, get_record_header, Header, Version};
+use crate::ParseError;
 
 #[test]
 fn can_read_record_header() {
@@ -8,14 +9,10 @@ fn can_read_record_header() {
                    X-Multiline-Test:lol \r\n  multiline headers\r\n\
                    \r\n";
 
-    let mut fields: HashMap<Uncased<'static>, Vec<u8>> = HashMap::new();
-    fields.insert("warc-type".into(), b"testdata".to_vec());
-    fields.insert("content-length".into(), b"6".to_vec());
-    fields.insert("x-multiline-test".into(), b"lol multiline headers".to_vec());
-    let expected = Header {
-        version: Version { major: 1, minor: 0 },
-        fields: fields,
-    };
+    let mut expected = Header::new(1, 0);
+    expected.set_field("warc-type", b"testdata".to_vec());
+    expected.set_field("content-length", b"6".to_vec());
+    expected.set_field("x-multiline-test", b"lol multiline headers".to_vec());
 
     assert_eq!(
         get_record_header(&header[..]).expect("Should be valid"),
@@ -45,7 +42,7 @@ fn extra_buffering_works() {
             unimplemented!();
         }
     }
-    impl<'a> BufRead for DoubleBuffer<'a> {
+    impl<'a> io::BufRead for DoubleBuffer<'a> {
         fn fill_buf(&mut self) -> Result<&[u8]> {
             eprintln!("fill_buf {:?}", self);
             match self {

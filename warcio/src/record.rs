@@ -1,4 +1,5 @@
 use super::ParseError;
+use crate::header::get_record_header;
 use std::cmp;
 use std::error::Error as StdError;
 use std::fmt;
@@ -144,7 +145,7 @@ where
     R: BufRead,
 {
     /// The parsed record header.
-    pub header: super::Header,
+    pub header: crate::header::Header,
     /// The record Content-Length in bytes
     content_length: u64,
     /// The number of bytes left to read in the record body
@@ -301,7 +302,7 @@ where
             )),
         };
 
-        let header = super::get_record_header(&mut input)?;
+        let header = get_record_header(&mut input)?;
         let len = match header.content_length() {
             None => {
                 return Err(InvalidRecord::UnknownLength(

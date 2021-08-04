@@ -1,5 +1,7 @@
 use std::io::BufRead;
-use warcio::{Header, Record};
+
+use warcio::header::Header;
+use warcio::record::Record;
 
 pub trait Digester: Sized {
     type Digest;

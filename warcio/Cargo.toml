@@ -1,6 +1,6 @@
 [package]
 name = "warcio"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Peter Marheine <peter@taricorp.net>"]
 edition = "2018"
 
@@ -18,7 +18,13 @@ flate2 = "1.0.20"
 lazy_static = "1.0.0"
 log = "0.4.1"
 memchr = "2.4.0"
+phf = { version = "0.9.0", features = ["uncased"] }
 regex = "1.5.4"
+uncased = "0.9.6"
+
+[build-dependencies]
+phf_codegen = "0.9.0"
+rust-ini = "0.17.0"
 uncased = "0.9.6"
 
 [dev-dependencies]

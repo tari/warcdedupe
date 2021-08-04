@@ -2,10 +2,13 @@
 extern crate criterion;
 extern crate warcio;
 
-use criterion::{Criterion, Fun};
 use std::io::BufRead;
 use std::time::Duration;
-use warcio::{get_record_header, Header, ParseError};
+
+use criterion::{Criterion, Fun};
+
+use warcio::header::{get_record_header, Header};
+use warcio::ParseError;
 
 criterion_main!(benches);
 criterion_group! {
