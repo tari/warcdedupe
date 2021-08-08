@@ -62,8 +62,8 @@ impl std::cmp::PartialEq for ParseError {
         use ParseError::*;
 
         match (self, other) {
-            (&InvalidSignature, &InvalidSignature) | (&MalformedField, &MalformedField) => true,
-            (&IoError(ref e1), &IoError(ref e2)) => e1.kind() == e2.kind(),
+            (InvalidSignature, InvalidSignature) | (MalformedField, MalformedField) => true,
+            (IoError(e1), IoError(e2)) => e1.kind() == e2.kind(),
             (_, _) => false,
         }
     }

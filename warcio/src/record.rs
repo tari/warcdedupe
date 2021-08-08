@@ -76,6 +76,7 @@ impl fmt::Display for InvalidRecord {
 pub enum Compression {
     None,
     Gzip,
+    // TODO zstd mode https://iipc.github.io/warc-specifications/specifications/warc-zstd/
 }
 
 impl Compression {
@@ -297,7 +298,10 @@ where
         let mut input = match compression {
             Compression::None => Input::Plain(reader),
             // TODO an option to specify the buffer size could be useful
-            Compression::Gzip => Input::Compressed(std::io::BufReader::new(
+            // TODO support passing in a buffer so we don't waste time reallocating
+            // for every record- bonus: buf_redux?
+            Compression::Gzip => Input::Compressed(std::io::BufReader::with_capacity(
+                2 << 20,
                 flate2::bufread::GzDecoder::new(reader),
             )),
         };

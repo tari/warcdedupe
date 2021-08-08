@@ -10,10 +10,12 @@ use crate::digest::Digester;
 use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
 use std::marker::PhantomData;
+use warcio::header::FieldName;
 
 pub mod digest;
 pub mod response_log;
 
+// TODO: builder pattern seems worthwhile
 pub struct Deduplicator<D, L, W> {
     // The digester implementation must be stable over the life of
     // a deduplicator, but we don't hold an instance.
@@ -35,6 +37,7 @@ where
             digester: Default::default(),
             log,
             output_compression,
+            // TODO: io::copy can reuse a write buffer (from a BufWriter), may be worthwhile
             output,
         }
     }
@@ -70,18 +73,26 @@ where
 
         // For HTTP responses, we'll only digest the response body and ignore headers as
         // specified by WARC 1.1 6.3.2 and RFC 2616.
-        // TODO application/http alone is also okay
-        let content_is_http_response = record.header.field_str("Content-Type").unwrap_or("")
-            == "application/http;msgtype=response";
+        let content_type: Option<mime::Mime> = record
+            .header
+            .get_field(FieldName::ContentType)
+            .and_then(|s| s.parse().ok());
+        let content_is_http_response = content_type.map_or(false, |t| {
+            t.essence_str() == "application/http"
+                && t.get_param("msgtype").map_or(true, |mt| mt == "response")
+        });
         let uri_is_http = record
             .header
             .field_uri("WARC-Target-URI")
-            .map(|uri| uri.starts_with("http:") || uri.starts_with("https:"))
-            .unwrap_or(false);
+            .map_or(false, |uri| {
+                uri.starts_with("http:") || uri.starts_with("https:")
+            });
+
         // The data representing HTTP headers which gets included in the revisit record.
         // If non-empty, a WARC-Truncated record header with reason "length" will be output for
         // deduplicated records with the contained data included in the record.
         let mut prefix_data: Vec<u8> = Vec::new();
+
         if content_is_http_response || uri_is_http {
             let mut consumed_bytes = 0usize;
 
@@ -93,9 +104,8 @@ where
                 prefix_data.extend_from_slice(record.fill_buf()?);
 
                 // We need a response to parse into, but don't actually care about the contents.
-                // Since parse() borrows from prefix_data, we limit its lifetime to a portion of
-                // the loop body.
-                let mut parsed_response = httparse::Response::new(&mut []);
+                let mut headers_buf = [httparse::EMPTY_HEADER; 64];
+                let mut parsed_response = httparse::Response::new(&mut headers_buf);
                 match httparse::Response::parse(&mut parsed_response, &prefix_data) {
                     Ok(httparse::Status::Complete(n)) => {
                         // Advance input past HTTP headers to digest payload only
@@ -139,6 +149,7 @@ where
             }
             Some(d) => d,
         };
+        debug!("Digested record to {:?}", digest);
 
         let record_id = record
             .header
@@ -182,7 +193,10 @@ where
         dedup_headers.set_field("WARC-Payload-Digest", D::format_digest(&digest));
         dedup_headers.set_field("Content-Length", format!("{}", prefix_data.len()));
         dedup_headers.set_field("WARC-Truncated", "length");
-        let mut dedup_body = dedup_headers.write_to(&mut self.output)?;
+
+        // TODO: this seems to be writing extra garbage after the prefix data
+        // TODO: WARC-Block-Digest must be updated or removed?
+        let mut dedup_body = dedup_headers.write_to(&mut self.output, self.output_compression)?;
         dedup_body.write_all(&prefix_data)?;
         return Ok(ProcessOutcome::Deduplicated);
     }
@@ -190,11 +204,14 @@ where
     /// Read and deduplicate a single record from the provided input.
     ///
     /// Only data up to the end of the record will be consumed from the input.
-    pub fn read<R: BufRead + Seek>(
+    ///
+    /// Returns true on success if the record was deduplicated, or false if it was simply
+    /// copied.
+    pub fn read_record<R: BufRead + Seek>(
         &mut self,
         mut input: R,
         compression: Compression,
-    ) -> Result<(), ProcessError> {
+    ) -> Result<bool, ProcessError> {
         let start_offset = input.stream_position()?;
         trace!(
             "Deduplicator start record read from input offset {}",
@@ -202,6 +219,8 @@ where
         );
         let mut record = Record::read_from(&mut input, compression)?;
 
+        // TODO: if a payload digest is already present in the record we may be able to use that
+        // instead of computing a fresh one.
         if self.process_record(&mut record)? == ProcessOutcome::NeedsCopy {
             // Not a duplicate. Drop the record to regain access to the raw input so we can
             // copy the raw record data with std::io::copy, taking advantage of OS-level copy
@@ -229,8 +248,29 @@ where
                     std::io::copy(&mut GzDecoder::new(&mut raw_record), &mut self.output)?
                 }
             };
+
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
+    }
+
+    pub fn read_stream<R: BufRead + Seek>(
+        &mut self,
+        mut input: R,
+        compression: Compression,
+    ) -> Result<(u64, u64), ProcessError> {
+        let mut n_copied = 0;
+        let mut n_deduped = 0;
+
+        while !input.fill_buf()?.is_empty() {
+            let deduped = self.read_record(&mut input, compression)?;
+            if deduped {
+                n_deduped += 1;
+            } else {
+                n_copied += 1;
+            }
+        }
+        Ok((n_copied, n_deduped))
     }
 }
 
@@ -257,3 +297,6 @@ impl From<InvalidRecord> for ProcessError {
         ProcessError::InvalidRecord(e)
     }
 }
+
+#[cfg(test)]
+mod test;

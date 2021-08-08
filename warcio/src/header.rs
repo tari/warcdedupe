@@ -3,9 +3,10 @@ use std::io::BufRead;
 use std::str::{self, FromStr};
 
 use regex::bytes::Regex;
-use uncased::{UncasedStr, AsUncased};
+use uncased::{AsUncased, UncasedStr};
 
 use super::{CTL, SEPARATORS};
+use crate::record::Compression;
 use crate::ParseError;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -185,7 +186,39 @@ impl Header {
     /// not pad the output if dropped before `Content-Length` bytes have been written. Failing
     /// to write enough data will usually result in data corruption, but an error will also
     /// be emitted to the log.
-    pub fn write_to<W: std::io::Write>(&self, mut dest: W) -> std::io::Result<impl std::io::Write> {
+    pub fn write_to<W: std::io::Write>(
+        &self,
+        mut dest: W,
+        compression: Compression,
+    ) -> std::io::Result<impl std::io::Write> {
+        use flate2::write::GzEncoder;
+        use std::io::{Result as IoResult, Write};
+
+        enum Output<W: Write> {
+            Plain(W),
+            Gzip(GzEncoder<W>),
+        }
+        impl<W: Write> Write for Output<W> {
+            fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+                match self {
+                    Output::Plain(w) => w.write(buf),
+                    Output::Gzip(w) => w.write(buf),
+                }
+            }
+
+            fn flush(&mut self) -> IoResult<()> {
+                match self {
+                    Output::Plain(w) => w.flush(),
+                    Output::Gzip(w) => w.flush(),
+                }
+            }
+        }
+
+        let mut dest = match compression {
+            Compression::None => Output::Plain(dest),
+            Compression::Gzip => Output::Gzip(GzEncoder::new(dest, flate2::Compression::best())),
+        };
+
         // record header: version followed by fields
         write!(
             dest,
@@ -197,6 +230,8 @@ impl Header {
             dest.write_all(value)?;
             write!(&mut dest, "\r\n")?;
         }
+        write!(&mut dest, "\r\n")?;
+
         // record body: Content-Length octets of arbitrary data
         Ok(crate::record::RecordWriter::new(
             dest,
@@ -205,19 +240,38 @@ impl Header {
         ))
     }
 
-    pub fn get_field<F: AsUncased>(&self, field: F) -> Option<&[u8]> {
+    /// Get the value of a header field as bytes, or None if no such header exists.
+    ///
+    /// Although the WARC specification does not permit values that are not also valid Rust strings,
+    /// users that wish to be lenient in accepting malformed records may wish to relax that
+    /// requirement by using this function.
+    pub fn get_field_bytes<F: AsUncased>(&self, field: F) -> Option<&[u8]> {
         self.fields.get(field.as_uncased()).map(Vec::as_slice)
     }
 
-    pub fn get_field_str<F: AsUncased>(&self, field: F) -> Option<Result<&str, std::str::Utf8Error>> {
-        self.get_field(field).map(str::from_utf8)
+    /// Get the value of a header field, or None if it does not exist or is not a valid Rust string.
+    ///
+    /// If you want to handle potentially malformed records, [`get_field_bytes`] allows you to
+    /// accept values that are not acceptable Rust strings if the actual value is not important.
+    /// However, because such a value would be malformed according to the specification, it should
+    /// rarely be required.
+    pub fn get_field<F: AsUncased>(&self, field: F) -> Option<&str> {
+        str::from_utf8(self.get_field_bytes(field)?).ok()
+    }
+
+    pub fn field_exists<F: AsUncased>(&self, field: F) -> bool {
+        self.get_field_bytes(field).is_some()
     }
 
     /// Set the value of a header field, returning the old value (if any).
     ///
     /// This function will panic if the provided name contains characters that are not
     /// permitted in `field-name` context.
-    pub fn set_field<N: Into<FieldName>, V: Into<Vec<u8>>>(&mut self, name: N, value: V) -> Option<Vec<u8>> {
+    pub fn set_field<N: Into<FieldName>, V: Into<Vec<u8>>>(
+        &mut self,
+        name: N,
+        value: V,
+    ) -> Option<Vec<u8>> {
         let name = name.into();
         let name_str: &str = name.as_ref();
         assert!(
@@ -232,7 +286,7 @@ impl Header {
     ///
     /// Returns None if there is no such field. The field name is
     /// case-insensitive.
-    #[deprecated(note="Use get_field() instead")]
+    #[deprecated(note = "Use get_field() instead")]
     pub fn field<S: AsRef<str>>(&self, name: S) -> Option<&[u8]> {
         self.fields
             .get(UncasedStr::new(name.as_ref()))
@@ -243,7 +297,7 @@ impl Header {
     ///
     /// Returns None if there is no such field or its value is not a valid
     /// string. The field name is case-insensitive.
-    #[deprecated(note="Use get_field_str() instead")]
+    #[deprecated(note = "Use get_field_str() instead")]
     pub fn field_str<S: AsRef<str>>(&self, name: S) -> Option<&str> {
         self.field(UncasedStr::new(name.as_ref()))
             .and_then(|b| str::from_utf8(b).ok())
@@ -356,15 +410,6 @@ impl Header {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum StandardVersion {
-    // TODO: WARC 0.9? http://archive-access.sourceforge.net/warc/warc_file_format-0.9.html
-    /// ISO 28500:2009: WARC 1.0
-    Warc1_0,
-    /// ISO 28500:2017: WARC 1.1
-    Warc1_1,
-}
-
 /// The version of a WARC record.
 ///
 /// Versions 0.9, 1.0 and 1.1 are all well-known, corresponding to the IIPC draft
@@ -377,7 +422,7 @@ pub enum StandardVersion {
 /// Versions for which a standards document exist can be conveniently expressed as
 /// a [`StandardVersion`] which may be compared with a `Version` and converted to
 /// one via the [`Into`] implementation.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct Version {
     /// The integer part of the version number.
     ///
@@ -389,23 +434,13 @@ pub struct Version {
     pub minor: u32,
 }
 
-impl From<StandardVersion> for Version {
-    fn from(v: StandardVersion) -> Self {
-        match v {
-            StandardVersion::Warc1_0 => Version { major: 1, minor: 0 },
-            StandardVersion::Warc1_1 => Version { major: 1, minor: 0 },
-        }
-    }
-}
-
-impl PartialEq<StandardVersion> for Version {
-    fn eq(&self, other: &StandardVersion) -> bool {
-        let other: Version = (*other).into();
-        &other == self
-    }
-}
-
 impl Version {
+    // TODO: WARC 0.9? http://archive-access.sourceforge.net/warc/warc_file_format-0.9.html
+    /// WARC 1.0: ISO 28500:2009
+    pub const WARC1_0: Self = Version { major: 1, minor: 0 };
+    /// WARC 1.1: ISO 28500:2017
+    pub const WARC1_1: Self = Version { major: 1, minor: 0 };
+
     /// Parse the version line from a record header, returning the number of bytes
     /// consumed and the version.
     pub fn parse(bytes: &[u8]) -> Result<(usize, Version), ParseError> {

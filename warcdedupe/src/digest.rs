@@ -1,10 +1,11 @@
 use std::io::BufRead;
 
-use warcio::header::Header;
+use std::fmt::Debug;
+use warcio::header::{FieldName, Header};
 use warcio::record::Record;
 
 pub trait Digester: Sized {
-    type Digest;
+    type Digest: Debug + Eq + Clone;
 
     /// Create a new digester, or return None if the record is not eligible
     /// for deduplication.
@@ -57,23 +58,35 @@ pub struct UrlLengthBlake3Digester {
     // WARC-Refers-To-Target-URI is not required for revisit records and
     // "it is not necessary that the URI of the original capture and the revisit be
     // identical" (6.7.2).
-    url: String,
+    url: Box<str>,
     hasher: blake3::Hasher,
 }
 
+impl UrlLengthBlake3Digester {
+    const MIN_PARALLEL_LEN: usize = 1 << 20;
+}
+
 impl Digester for UrlLengthBlake3Digester {
-    type Digest = (String, u64, [u8; blake3::OUT_LEN]);
+    type Digest = (Box<str>, u64, [u8; blake3::OUT_LEN]);
 
     fn new(x: &Header) -> Option<Self> {
         Some(Self {
             length: x.content_length()?,
-            url: x.field_str("WARC-Target-URI")?.to_owned(),
+            url: x
+                .get_field(FieldName::TargetURI)?
+                .to_owned()
+                .into_boxed_str(),
             hasher: blake3::Hasher::new(),
         })
     }
 
     fn handle_data(&mut self, data: &[u8]) {
-        self.hasher.update(data);
+        if data.len() < Self::MIN_PARALLEL_LEN {
+            self.hasher.update(data);
+        } else {
+            debug!("using parallel hash for payload of {} bytes!", data.len());
+            self.hasher.update_rayon(data);
+        }
     }
 
     fn finalize(self) -> Self::Digest {
