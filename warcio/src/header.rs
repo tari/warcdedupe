@@ -145,6 +145,7 @@ include!(concat!(env!("OUT_DIR"), "/header_record_types.rs"));
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Header {
     version: Version,
+    // TODO stable sorting of headers would be nice to make them ordered consistently when written
     fields: HashMap<FieldName, Vec<u8>>,
 }
 

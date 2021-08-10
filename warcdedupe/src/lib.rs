@@ -62,6 +62,8 @@ where
         // The spec permits use of revisit records for any kind of record (noting it's
         // typical for response and resource records), but it's likely to be most
         // useful only for responses.
+        // TODO: truncated records might have the same payload after truncation as another truncated
+        // record but the truncated part might differ. Possibly ignore truncated records.
         if record.header.warc_type() != Some("response") {
             trace!(
                 "Skip non-response record {:?} of type {:?}",
@@ -174,6 +176,7 @@ where
         // We'll create a new revisit record to emit, starting by copying the fields from the
         // original record then updating various fields.
         // TODO clone header names but convert to WARC 1.1 (including translating URIs)
+        // TODO for small bodies (with small space savings) it's not worth writing a revisit
         let mut dedup_headers = record.header.clone();
         // We're emitting a revisit record according to WARC 1.1, based on an identical
         // payload digest.
