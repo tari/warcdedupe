@@ -3,6 +3,7 @@ members = ["warcio", "warcdedupe"]
 
 [profile.release]
 lto = "thin"
+debug = true
 
 [profile.bench]
 lto = true
