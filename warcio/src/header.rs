@@ -1,16 +1,17 @@
-use std::collections::HashMap;
-use std::io::BufRead;
-use std::str::{self, FromStr};
-
-use regex::bytes::Regex;
-use uncased::{AsUncased, UncasedStr};
-
-use super::{CTL, SEPARATORS};
-use crate::record::Compression;
-use crate::ParseError;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::io::BufRead;
+use std::str::{self, FromStr};
+
+use indexmap::map::IndexMap;
+use regex::bytes::Regex;
+use uncased::{AsUncased, UncasedStr};
+
+use crate::record::Compression;
+use crate::ParseError;
+
+use super::{CTL, SEPARATORS};
 
 /// The name of a WARC header field.
 ///
@@ -141,12 +142,15 @@ pub enum RecordType {
 
 include!(concat!(env!("OUT_DIR"), "/header_record_types.rs"));
 
+// We use an IndexMap to preserve the read order of fields when writing them back out;
+// std::collections::HashMap randomizes ordering.
+type FieldMap = IndexMap<FieldName, Vec<u8>>;
+
 /// The header of a WARC record.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Header {
     version: Version,
-    // TODO stable sorting of headers would be nice to make them ordered consistently when written
-    fields: HashMap<FieldName, Vec<u8>>,
+    fields: FieldMap,
 }
 
 impl Header {
@@ -156,7 +160,7 @@ impl Header {
                 major: major_version,
                 minor: minor_version,
             },
-            fields: HashMap::new(),
+            fields: Default::default(),
         }
     }
 
@@ -166,7 +170,7 @@ impl Header {
         let (mut bytes_consumed, version) = Version::parse(bytes)?;
         bytes = &bytes[bytes_consumed..];
 
-        let mut fields = HashMap::new();
+        let mut fields: FieldMap = Default::default();
         while &bytes[..2] != b"\r\n" {
             let (n, field) = Field::parse(bytes)?;
             bytes_consumed += n;
@@ -189,7 +193,7 @@ impl Header {
     /// be emitted to the log.
     pub fn write_to<W: std::io::Write>(
         &self,
-        mut dest: W,
+        dest: W,
         compression: Compression,
     ) -> std::io::Result<impl std::io::Write> {
         use flate2::write::GzEncoder;
