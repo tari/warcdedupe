@@ -8,9 +8,6 @@ name = "warcdedupe"
 
 [lib]
 
-[features]
-default = []
-
 [dependencies]
 warcio = { path = "../warcio" }
 
