@@ -4,7 +4,7 @@ extern crate log;
 use std::io::{BufRead, Error, Seek, Write};
 
 use response_log::ResponseLog;
-use warcio::record::{Compression, InvalidRecord, Record};
+use warcio::record::{Buffer, Compression, FinishError, InvalidRecord, Record};
 
 use crate::digest::Digester;
 use flate2::bufread::GzDecoder;
@@ -21,6 +21,7 @@ pub struct Deduplicator<D, L, W> {
     // a deduplicator, but we don't hold an instance.
     digester: PhantomData<D>,
     log: L,
+    decompress_buffer: Option<Buffer>,
     output_compression: Compression,
     output: W,
 }
@@ -36,6 +37,7 @@ where
         Self {
             digester: Default::default(),
             log,
+            decompress_buffer: Some(Buffer::with_capacity(2 << 20)),
             output_compression,
             // TODO: io::copy can reuse a write buffer (from a BufWriter), may be worthwhile
             output,
@@ -57,6 +59,8 @@ where
                 return Ok(NeedsCopy);
             }
         };
+
+        // TODO: update the WARC-Filename of warcinfo records?
 
         // Only consider responses to be candidates for deduplication.
         // The spec permits use of revisit records for any kind of record (noting it's
@@ -220,15 +224,23 @@ where
             "Deduplicator start record read from input offset {}",
             start_offset
         );
-        let mut record = Record::read_from(&mut input, compression)?;
 
+        let mut record = Record::read_buffered_from(
+            input,
+            self.decompress_buffer
+                .take()
+                .expect("read_buffer should not be stolen"),
+            compression,
+        )?;
         // TODO: if a payload digest is already present in the record we may be able to use that
         // instead of computing a fresh one.
         if self.process_record(&mut record)? == ProcessOutcome::NeedsCopy {
             // Not a duplicate. Drop the record to regain access to the raw input so we can
             // copy the raw record data with std::io::copy, taking advantage of OS-level copy
             // acceleration like copy_file_range(2) or sendfile(2).
-            drop(record);
+            let (mut input, buffer) = record.finish()?;
+            self.decompress_buffer = Some(buffer);
+
             let end_offset = input.stream_position()?;
             input.seek(std::io::SeekFrom::Start(start_offset))?;
             let mut raw_record = input.take(end_offset - start_offset);
@@ -254,6 +266,9 @@ where
 
             return Ok(false);
         }
+
+        let (_, buffer) = record.finish()?;
+        self.decompress_buffer = Some(buffer);
         Ok(true)
     }
 
@@ -286,6 +301,7 @@ enum ProcessOutcome {
 #[derive(Debug)]
 pub enum ProcessError {
     InvalidRecord(InvalidRecord),
+    Truncated,
     IoError(std::io::Error),
 }
 
@@ -298,6 +314,15 @@ impl From<std::io::Error> for ProcessError {
 impl From<InvalidRecord> for ProcessError {
     fn from(e: InvalidRecord) -> Self {
         ProcessError::InvalidRecord(e)
+    }
+}
+
+impl From<FinishError> for ProcessError {
+    fn from(e: FinishError) -> Self {
+        match e {
+            FinishError::Io(e) => ProcessError::IoError(e),
+            FinishError::MissingTail => ProcessError::Truncated,
+        }
     }
 }
 

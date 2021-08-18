@@ -4,7 +4,7 @@ extern crate lazy_static;
 extern crate serde_derive;
 
 use std::fs::File;
-use std::io::{BufReader, Cursor, Write};
+use std::io::{BufReader, BufWriter, Cursor, Write};
 use std::path::PathBuf;
 
 use docopt::Docopt;
@@ -48,7 +48,9 @@ fn maybe_file(o: Option<PathBuf>) -> Option<PathBuf> {
 
 fn open_output_stream(p: Option<PathBuf>) -> Box<dyn Write> {
     if let Some(p) = maybe_file(p) {
-        Box::new(File::create(&p).expect("Failed to create output file"))
+        Box::new(BufWriter::new(
+            File::create(&p).expect("Failed to create output file"),
+        ))
     } else {
         // Locking stdout takes a ref to the instance, so it must be static
         lazy_static! {

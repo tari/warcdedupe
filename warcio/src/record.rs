@@ -1,5 +1,6 @@
 use super::ParseError;
 use crate::header::get_record_header;
+use buf_redux::BufReader;
 use std::cmp;
 use std::error::Error as StdError;
 use std::fmt;
@@ -7,6 +8,8 @@ use std::io::prelude::*;
 use std::io::Error as IoError;
 use std::ops::Drop;
 use std::path::Path;
+
+pub use buf_redux::Buffer;
 
 /// The number of bytes to skip per read() call when closing a record.
 ///
@@ -93,8 +96,24 @@ enum Input<R>
 where
     R: BufRead,
 {
-    Plain(R),
-    Compressed(std::io::BufReader<flate2::bufread::GzDecoder<R>>),
+    // The buffer is unused, stored only for uniformity so the input always owns the buffer.
+    Plain(R, Buffer),
+    Compressed(BufReader<flate2::bufread::GzDecoder<R>>),
+}
+
+impl<R> Input<R>
+where
+    R: BufRead,
+{
+    fn into_inner(self) -> (R, Buffer) {
+        match self {
+            Input::Plain(r, buf) => (r, buf),
+            Input::Compressed(r) => {
+                let (r, buf) = r.into_inner_with_buffer();
+                (r.into_inner(), buf)
+            }
+        }
+    }
 }
 
 impl<R> Read for Input<R>
@@ -103,7 +122,7 @@ where
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            Input::Plain(r) => r.read(buf),
+            Input::Plain(r, _) => r.read(buf),
             Input::Compressed(r) => r.read(buf),
         }
     }
@@ -115,14 +134,14 @@ where
 {
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
         match self {
-            Input::Plain(r) => r.fill_buf(),
+            Input::Plain(r, _) => r.fill_buf(),
             Input::Compressed(r) => r.fill_buf(),
         }
     }
 
     fn consume(&mut self, amt: usize) {
         match self {
-            Input::Plain(r) => r.consume(amt),
+            Input::Plain(r, _) => r.consume(amt),
             Input::Compressed(r) => r.consume(amt),
         }
     }
@@ -236,17 +255,6 @@ where
     }
 }
 
-impl<R> Drop for Record<R>
-where
-    R: BufRead,
-{
-    fn drop(&mut self) {
-        if let Err(e) = self.finish_internal() {
-            error!("{:?} while closing WARC record", e);
-        }
-    }
-}
-
 /// Errors that might occur when closing a record.
 #[derive(Debug)]
 pub enum FinishError {
@@ -291,19 +299,34 @@ where
 {
     /// Read a record from an input stream.
     ///
-    /// Because the record ensures the input is advanced past the payload when
-    /// it goes out of scope, the reader is inaccessible as long as the record
-    /// is live if a reference is provided.
+    /// This allocates a new buffer on every invocation, which can be very costly because buffers
+    /// are zeroed on allocation. If reading many records, prefer to use [`read_buffered_from`] to
+    /// reuse a buffer across records.
     pub fn read_from(reader: R, compression: Compression) -> Result<Self, InvalidRecord> {
+        let buffer = Buffer::with_capacity(8 << 10);
+        Self::read_buffered_from(reader, buffer, compression)
+    }
+
+    /// Read a record from an input stream with a user-provided buffer.
+    ///
+    /// The provided buffer will be returned so it can be reused by the caller, which is useful
+    /// for performance because it can be allocated once and used many times. This needs to
+    /// (slightly awkwardly) take ownership of the buffer because the current buffering API does
+    /// not accept a mutable reference to a buffer.
+    pub fn read_buffered_from(
+        reader: R,
+        mut buffer: Buffer,
+        compression: Compression,
+    ) -> Result<Self, InvalidRecord> {
         let mut input = match compression {
-            Compression::None => Input::Plain(reader),
-            // TODO an option to specify the buffer size could be useful
-            // TODO support passing in a buffer so we don't waste time reallocating
-            // for every record- bonus: buf_redux?
-            Compression::Gzip => Input::Compressed(std::io::BufReader::with_capacity(
-                2 << 20,
-                flate2::bufread::GzDecoder::new(reader),
-            )),
+            Compression::None => Input::Plain(reader, buffer),
+            Compression::Gzip => {
+                buffer.clear();
+                Input::Compressed(BufReader::with_buffer(
+                    buffer,
+                    flate2::bufread::GzDecoder::new(reader),
+                ))
+            }
         };
 
         let header = get_record_header(&mut input)?;
@@ -311,18 +334,19 @@ where
             None => {
                 return Err(InvalidRecord::UnknownLength(
                     header.field("Content-Length").map(|bytes| bytes.to_vec()),
-                ))
+                ));
             }
             Some(n) => n,
         };
 
-        Ok(Record {
+        let record = Record {
             content_length: len,
             bytes_remaining: len,
             header,
             input,
             debug_info: DebugInfo::new(),
-        })
+        };
+        Ok(record)
     }
 
     /// Get the expected length of the record body.
@@ -330,23 +354,22 @@ where
         self.content_length
     }
 
-    /// Advance the input reader past this record's payload.
+    /// Advance the input reader past this record's payload and return the input.
     ///
-    /// Unlike the `Drop` impl, this method returns a `Result` so you can
-    /// handle I/O errors that may occur while advancing the input.
+    /// This method **must be called** if the caller wants to continue reading from
+    /// the input following this record. If not, the input stream may be left somewhere in
+    /// the middle of the record, and the exact location is not predictable.
     ///
     /// Expects there to be two newlines following the payload as specified by
     /// the WARC standard, but is tolerant of having none- if missing
     /// `FinishError::MissingTail` will be returned. Regardless of the presence
     /// of a correct tail however, bytes will be consumed which may cause some
     /// of the following data to be lost.
-    pub fn finish(mut self) -> Result<(), FinishError> {
+    pub fn finish(mut self) -> Result<(R, Buffer), FinishError> {
         self.finish_internal()?;
-        // Manually deconstruct self to prevent the redundant drop but still
-        // ensure members are dropped as necessary.
-        let Record { .. } = self;
+        let Record { input, .. } = self;
 
-        Ok(())
+        Ok(input.into_inner())
     }
 
     /// Actual drop implementation.
@@ -430,6 +453,7 @@ impl<W: Write> Write for RecordWriter<W> {
         let written = self.writer.write(&buf[..take as usize])?;
         self.written += written as u64;
         Ok(written)
+        // TODO: records must end with CRLF2!
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
