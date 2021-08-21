@@ -16,7 +16,7 @@ WARC-Target-URI: <https://example.com/example.txt>\r
 WARC-Date: 2018-01-28T13:33:12Z\r
 WARC-IP-Address: 2606:2800:220:1:248:1893:25c8:1946\r
 Content-Type: application/http;msgtype=response\r
-Content-Length: 810\r
+Content-Length: 132\r
 \r
 HTTP/1.1 404 Not Found\r
 Date: Sun, 28 Jan 2018 13:33:12 GMT\r
@@ -24,6 +24,8 @@ Content-Type: text/plain\r
 Content-Length: 23\r
 \r
 There is nothing here.
+\r
+\r
 ";
 
 /// A Digester for which records may never be deduplicated.
@@ -109,6 +111,7 @@ fn copies_ineligible() {
     let mut out = Vec::<u8>::new();
     let mut deduplicator =
         Deduplicator::<IneligibleDigester, _, _>::new(&mut out, AlwaysSeen, Compression::None);
+    // TODO "failed to fill whole buffer" is a read_exact error from record::finish_internal
     let deduplicated = deduplicator
         .read_record(Cursor::new(HTTP_RECORD.as_bytes()), Compression::None)
         .expect("should read record okay");
