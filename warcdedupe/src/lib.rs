@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate log;
 
-use std::io::{BufRead, Error, Seek, Write};
+use std::io::{BufRead, Seek, Write};
 
 use response_log::ResponseLog;
 use warcio::record::{Buffer, Compression, FinishError, InvalidRecord, Record};
@@ -10,6 +10,7 @@ use crate::digest::Digester;
 use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
 use std::marker::PhantomData;
+use thiserror::Error;
 use warcio::header::FieldName;
 
 pub mod digest;
@@ -205,7 +206,7 @@ where
         // TODO: WARC-Block-Digest must be updated or removed?
         let mut dedup_body = dedup_headers.write_to(&mut self.output, self.output_compression)?;
         dedup_body.write_all(&prefix_data)?;
-        return Ok(ProcessOutcome::Deduplicated);
+        Ok(ProcessOutcome::Deduplicated)
     }
 
     /// Read and deduplicate a single record from the provided input.
@@ -298,23 +299,14 @@ enum ProcessOutcome {
     NeedsCopy,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ProcessError {
-    InvalidRecord(InvalidRecord),
+    #[error("record is malformed")]
+    InvalidRecord(#[from] InvalidRecord),
+    #[error("input was truncated")]
     Truncated,
-    IoError(std::io::Error),
-}
-
-impl From<std::io::Error> for ProcessError {
-    fn from(e: Error) -> Self {
-        ProcessError::IoError(e)
-    }
-}
-
-impl From<InvalidRecord> for ProcessError {
-    fn from(e: InvalidRecord) -> Self {
-        ProcessError::InvalidRecord(e)
-    }
+    #[error("I/O error")]
+    IoError(#[from] std::io::Error),
 }
 
 impl From<FinishError> for ProcessError {
