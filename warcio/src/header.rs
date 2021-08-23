@@ -8,8 +8,8 @@ use indexmap::map::IndexMap;
 use regex::bytes::Regex;
 use uncased::{AsUncased, UncasedStr};
 
-use crate::record::Compression;
 use crate::HeaderParseError;
+use crate::record::Compression;
 
 use super::{CTL, SEPARATORS};
 
@@ -17,7 +17,7 @@ use super::{CTL, SEPARATORS};
 ///
 /// Field names are case-insensitive, so the [`Eq`], [`Ord`] and [`Hash`] implementations for this
 /// type are all case-insensitive.
-#[derive(Debug, Eq, Ord, Clone)]
+#[derive(Debug, Clone)]
 pub enum FieldName {
     /// WARC-Record-ID: mandatory. A globally unique identifier for a record.
     ///
@@ -115,9 +115,17 @@ impl PartialEq for FieldName {
     }
 }
 
+impl Eq for FieldName {}
+
 impl PartialOrd for FieldName {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.as_ref().as_uncased().partial_cmp(other.as_ref())
+    }
+}
+
+impl Ord for FieldName {
+    fn cmp(&self, other: &Self) -> Ordering {
+        <Self as PartialOrd>::partial_cmp(self, other).unwrap()
     }
 }
 

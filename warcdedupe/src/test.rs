@@ -65,7 +65,7 @@ impl Digester for UnitDigester {
         ()
     }
 
-    fn format_digest(digest: &Self::Digest) -> String {
+    fn format_digest(_digest: &Self::Digest) -> String {
         "nop:".into()
     }
 }

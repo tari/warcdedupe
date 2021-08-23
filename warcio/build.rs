@@ -87,7 +87,7 @@ fn generate_conversions(ini: &Ini, base_path: &Path) -> Result<(), Box<dyn std::
         MAP
             .get(UncasedStr::new(s.as_ref()))
             .map(Clone::clone)
-            .unwrap_or({t}::{catchall}(s.into().into_boxed_str()))
+            .unwrap_or_else(|| {t}::{catchall}(s.into().into_boxed_str()))
     }}
 }}\n",
         t = type_name,

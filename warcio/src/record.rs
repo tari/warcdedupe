@@ -324,6 +324,7 @@ where
     }
 
     /// Get the expected length of the record body.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u64 {
         self.content_length
     }
