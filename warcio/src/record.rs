@@ -1,4 +1,4 @@
-use super::ParseError;
+use super::HeaderParseError;
 use crate::header::get_record_header;
 use buf_redux::BufReader;
 use std::cmp;
@@ -10,6 +10,7 @@ use std::ops::Drop;
 use std::path::Path;
 
 pub use buf_redux::Buffer;
+use thiserror::Error;
 
 /// The number of bytes to skip per read() call when closing a record.
 ///
@@ -17,59 +18,32 @@ pub use buf_redux::Buffer;
 const SKIP_BUF_LEN: usize = 4096;
 
 /// An error in reading a record from an input stream.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum InvalidRecord {
     /// The header of the record was malformed.
     ///
     /// This may mean the input doesn't actually contain WARC records.
-    InvalidHeader(ParseError),
+    #[error("record header is not valid: {0}")]
+    InvalidHeader(#[source] HeaderParseError),
     /// The length of the payload could not be determined.
     ///
     /// Contained value is the contents of the Content-Length header.
+    #[error("Content-Length is not a valid integer (contained bytes {0:?})")]
     UnknownLength(Option<Vec<u8>>),
     /// Reached the end of the input stream.
+    #[error("unexpected end of input")]
     EndOfStream,
     /// Other I/O error.
-    IoError(IoError),
+    #[error("I/O error")]
+    IoError(#[source] IoError),
 }
 
-impl From<ParseError> for InvalidRecord {
-    fn from(e: ParseError) -> InvalidRecord {
+impl From<HeaderParseError> for InvalidRecord {
+    fn from(e: HeaderParseError) -> Self {
         match e {
-            ParseError::IoError(e) => InvalidRecord::IoError(e),
-            ParseError::NoMoreData => InvalidRecord::EndOfStream,
+            HeaderParseError::IoError(e) => InvalidRecord::IoError(e),
+            HeaderParseError::Truncated => InvalidRecord::EndOfStream,
             e => InvalidRecord::InvalidHeader(e),
-        }
-    }
-}
-
-impl StdError for InvalidRecord {
-    fn cause(&self) -> Option<&dyn StdError> {
-        match self {
-            InvalidRecord::IoError(e) => Some(e),
-            InvalidRecord::InvalidHeader(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for InvalidRecord {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "Error reading WARC record: ")?;
-
-        use self::InvalidRecord::*;
-        match self {
-            InvalidHeader(e) => write!(f, "invalid record header: {}", e),
-            UnknownLength(None) => write!(f, "record missing required Content-Length header"),
-            UnknownLength(Some(bytes)) => {
-                write!(
-                    f,
-                    "illegal numeric value for Content-Length: {}",
-                    String::from_utf8_lossy(bytes)
-                )
-            }
-            EndOfStream => write!(f, "unexpected end of input"),
-            IoError(e) => write!(f, "I/O error: {}", e),
         }
     }
 }

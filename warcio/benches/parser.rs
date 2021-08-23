@@ -8,7 +8,7 @@ use std::time::Duration;
 use criterion::{Criterion, Fun};
 
 use warcio::header::{get_record_header, Header};
-use warcio::ParseError;
+use warcio::HeaderParseError;
 
 criterion_main!(benches);
 criterion_group! {
@@ -17,7 +17,7 @@ criterion_group! {
     targets = bench_get_record_header
 }
 
-fn get_record_header_windows<R: BufRead>(mut reader: R) -> Result<Header, ParseError> {
+fn get_record_header_windows<R: BufRead>(mut reader: R) -> Result<Header, HeaderParseError> {
     /// Return the index of the first position in the given buffer following
     /// a b"\r\n\r\n" sequence.
     #[inline]

@@ -39,63 +39,46 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 
+use thiserror::Error;
+
 pub mod header;
 pub mod record;
 #[cfg(test)]
 mod tests;
 
 /// Reasons it may be impossible to parse a WARC header.
-#[derive(Debug)]
-pub enum ParseError {
+#[derive(Debug, Error)]
+pub enum HeaderParseError {
     /// The WARC/m.n signature is not present or invalid.
-    InvalidSignature,
+    #[error("WARC signature missing or invalid (near \"{0}\")")]
+    InvalidSignature(String),
     /// A header field was malformed or truncated.
-    MalformedField,
+    #[error("header field is malformed or truncated")]
+    MalformedField, // TODO more information?
     /// An I/O error occured while trying to read the input.
-    IoError(std::io::Error),
+    #[error("I/O error: {0}")]
+    IoError(#[from] std::io::Error),
     /// Reached end of input.
-    NoMoreData,
+    #[error("input ended before end of header")]
+    Truncated,
 }
 
-impl std::cmp::PartialEq for ParseError {
+impl std::cmp::PartialEq for HeaderParseError {
     fn eq(&self, other: &Self) -> bool {
-        use ParseError::*;
+        use HeaderParseError::*;
 
         match (self, other) {
-            (InvalidSignature, InvalidSignature) | (MalformedField, MalformedField) => true,
+            (MalformedField, MalformedField) | (Truncated, Truncated) => true,
+            (InvalidSignature(x), InvalidSignature(y)) => x == y,
             (IoError(e1), IoError(e2)) => e1.kind() == e2.kind(),
             (_, _) => false,
         }
     }
 }
 
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use ParseError::*;
-
-        write!(f, "Invalid WARC header: ")?;
-        match self {
-            InvalidSignature => write!(f, "WARC signature is missing or invalid"),
-            MalformedField => write!(f, "Header field is malformed or truncated"),
-            NoMoreData => write!(f, "No more data available"),
-            IoError(e) => write!(f, "I/O error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for ParseError {
-    fn cause(&self) -> Option<&dyn std::error::Error> {
-        if let ParseError::IoError(ref e) = self {
-            Some(e)
-        } else {
-            None
-        }
-    }
-}
-
-impl From<std::io::Error> for ParseError {
-    fn from(e: std::io::Error) -> ParseError {
-        ParseError::IoError(e)
+impl HeaderParseError {
+    fn invalid_signature(sig_bytes: &[u8]) -> Self {
+        HeaderParseError::InvalidSignature(String::from_utf8_lossy(sig_bytes).into_owned())
     }
 }
 

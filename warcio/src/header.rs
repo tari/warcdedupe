@@ -9,7 +9,7 @@ use regex::bytes::Regex;
 use uncased::{AsUncased, UncasedStr};
 
 use crate::record::Compression;
-use crate::ParseError;
+use crate::HeaderParseError;
 
 use super::{CTL, SEPARATORS};
 
@@ -165,7 +165,7 @@ impl Header {
     }
 
     /// Parse a header from bytes, returning the header and the number of bytes consumed.
-    pub fn parse(mut bytes: &[u8]) -> Result<Header, ParseError> {
+    pub fn parse(mut bytes: &[u8]) -> Result<Header, HeaderParseError> {
         // version, fields, CRLF
         let (mut bytes_consumed, version) = Version::parse(bytes)?;
         bytes = &bytes[bytes_consumed..];
@@ -448,30 +448,40 @@ impl Version {
 
     /// Parse the version line from a record header, returning the number of bytes
     /// consumed and the version.
-    pub fn parse(bytes: &[u8]) -> Result<(usize, Version), ParseError> {
-        lazy_static! {
-            static ref RE: Regex =
-                Regex::new(r"^WARC/(\d+)\.(\d+)\r\n").expect("Version regex invalid");
-        }
-        fn bytes_to_u32(bytes: &[u8]) -> Result<u32, ParseError> {
+    pub fn parse(bytes: &[u8]) -> Result<(usize, Version), HeaderParseError> {
+        fn bytes_to_u32(bytes: &[u8]) -> Result<u32, HeaderParseError> {
             match str::from_utf8(bytes).map(u32::from_str) {
                 Ok(Ok(x)) => Ok(x),
-                Err(_) | Ok(Err(_)) => Err(ParseError::InvalidSignature),
+                Err(_) | Ok(Err(_)) => Err(HeaderParseError::invalid_signature(bytes)),
             }
         }
 
-        match RE.captures(bytes) {
-            None => Err(ParseError::InvalidSignature),
-            Some(m) => {
-                let version = Version {
-                    major: bytes_to_u32(&m[1])?,
-                    minor: bytes_to_u32(&m[2])?,
-                };
-                let bytes_consumed = m[0].len();
-
-                Ok((bytes_consumed, version))
-            }
+        if !bytes.starts_with(b"WARC/") {
+            return Err(HeaderParseError::invalid_signature(&bytes[..5]));
         }
+        let major_start = 5;
+        let major_end = match bytes[major_start..].iter().position(|&x| x == b'.') {
+            None => {
+                return Err(HeaderParseError::invalid_signature(
+                    &bytes[..major_start + 4],
+                ))
+            }
+            Some(i) => i + major_start,
+        };
+        let major = bytes_to_u32(&bytes[major_start..major_end])?;
+
+        let minor_start = major_end + 1;
+        let minor_end = match bytes[minor_start..].windows(2).position(|x| x == b"\r\n") {
+            None => {
+                return Err(HeaderParseError::invalid_signature(
+                    &bytes[..minor_start + 4],
+                ))
+            }
+            Some(i) => i + minor_start,
+        };
+        let minor = bytes_to_u32(&bytes[minor_start..minor_end])?;
+
+        Ok((minor_end + 2, Version { major, minor }))
     }
 }
 
@@ -499,7 +509,7 @@ impl Field {
     /// Parse a Field from bytes.
     ///
     /// Returns the number of bytes consumed and the parsed field on succes.
-    pub fn parse(bytes: &[u8]) -> Result<(usize, Field), ParseError> {
+    pub fn parse(bytes: &[u8]) -> Result<(usize, Field), HeaderParseError> {
         // TODO these may not correctly handle `quoted-string` values containing CRLF2
         lazy_static! {
             static ref RE: Regex =
@@ -511,7 +521,7 @@ impl Field {
         let m = match RE.captures(bytes) {
             None => {
                 debug!("Header regex did not match");
-                return Err(ParseError::MalformedField);
+                return Err(HeaderParseError::MalformedField);
             }
             Some(c) => c,
         };
@@ -536,65 +546,62 @@ impl Field {
     }
 }
 
+/// Return the index of the first position in the given buffer following
+/// a b"\r\n\r\n" sequence.
+#[inline]
+fn find_crlf2(buf: &[u8]) -> Option<usize> {
+    // TODO a naive implementation comparing windows() over buf actually seems slightly faster
+    // than an optimized searcher. Seems like headers are short enough and Finder overhead large
+    // enough that a simple (possibly autovectorized?) implementation is better. Should examine the
+    // generated code.
+    use memchr::memmem::Finder;
+    lazy_static! {
+        static ref SEARCHER: Finder<'static> = Finder::new(b"\r\n\r\n");
+    }
+
+    SEARCHER.find(buf).map(|i| i + 4)
+}
+
 /// Parse a WARC record header out of the provided `BufRead`.
 ///
 /// Consumes the bytes that are parsed, leaving the reader at the beginning
 /// of the record payload. In case of an error in parsing, some or all of the
 /// input may be consumed.
-pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError> {
-    /// Return the index of the first position in the given buffer following
-    /// a b"\r\n\r\n" sequence.
-    #[inline]
-    fn find_crlf2(buf: &[u8]) -> Option<usize> {
-        use memchr::memmem::Finder;
-        lazy_static! {
-            static ref SEARCHER: Finder<'static> = Finder::new(b"\r\n\r\n");
-        }
-
-        SEARCHER.find(buf).map(|i| i + 4)
-    }
-
+pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, HeaderParseError> {
     // Read bytes out of the input reader until we find the end of the header
     // (two CRLFs in a row).
     // First-chance: without copying anything
-    let mut header: Option<(usize, Header)> = None;
-    {
+    let header: Option<(usize, Header)> = {
         let buf = reader.fill_buf()?;
         if buf.is_empty() {
-            return Err(ParseError::NoMoreData);
+            return Err(HeaderParseError::Truncated);
         }
         if let Some(i) = find_crlf2(buf) {
             // Weird split of parse and consume here is necessary because buf
             // is borrowed from the reader so we can't consume until we no
             // longer hold a reference to the buffer.
-            header = Some((i, Header::parse(&buf[..i])?));
+            Some((i, Header::parse(&buf[..i])?))
+        } else {
+            None
         }
-    }
+    };
     if let Some((sz, header)) = header {
         trace!("Found complete header in buffer, {} bytes", sz);
         reader.consume(sz);
         return Ok(header);
     }
 
-    // Need to start copying out of the reader's buffer. Throughout this loop,
-    // we've grabbed some number of bytes and own them with a tail copied out
-    // of the reader's buffer but still buffered so we can give bytes back at
-    // the end.
+    // Second chance: need to start copying out of the reader's buffer. Throughout this loop,
+    // we've grabbed some number of bytes and own them with a tail copied out of the reader's
+    // buffer but still buffered so we can give bytes back at the end.
     let mut buf: Vec<u8> = Vec::new();
-    buf.extend(reader.fill_buf()?);
-    reader.consume(buf.len());
-
-    let mut bytes_consumed = buf.len();
+    let mut bytes_consumed = 0;
     loop {
         // Copy out of the reader
         buf.extend(reader.fill_buf()?);
         if buf.len() == bytes_consumed {
             // Read returned 0 bytes
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "WARC header not terminated",
-            )
-            .into());
+            return Err(HeaderParseError::Truncated);
         }
 
         // Only search new data; start from the earliest possible location
@@ -617,6 +624,6 @@ pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, ParseError
         // Otherwise keep looking
         reader.consume(buf.len() - bytes_consumed);
         bytes_consumed = buf.len();
-        // TODO enforce maximum vec size?
+        // TODO enforce maximum vec size? (to avoid unbounded memory use on malformed input)
     }
 }

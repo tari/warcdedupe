@@ -1,5 +1,5 @@
 use crate::header::{get_record_header, Field, Header, Version};
-use crate::ParseError;
+use crate::HeaderParseError;
 
 #[test]
 fn can_read_record_header() {
@@ -83,38 +83,31 @@ fn extra_buffering_works() {
 fn incorrect_signature_is_invalid() {
     assert_eq!(
         Version::parse(b"\x89PNG\r\n\x1a\n"),
-        Err(ParseError::InvalidSignature)
+        Err(HeaderParseError::InvalidSignature("\u{fffd}PNG\r".into()))
     );
     assert_eq!(
         Version::parse(b"WARC/1.0a\r\n"),
-        Err(ParseError::InvalidSignature)
+        Err(HeaderParseError::InvalidSignature("0a".into()))
     );
 }
 
 #[test]
 fn truncated_header_is_invalid() {
-    use std::io;
     const BYTES: &[u8] = b"WARC/1.1\r\n
                            Warc-Type: testdata\r\n\r";
 
-    assert_eq!(
-        get_record_header(BYTES),
-        Err(ParseError::IoError(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "WARC header not terminated"
-        )))
-    );
+    assert_eq!(get_record_header(BYTES), Err(HeaderParseError::Truncated),);
 }
 
 #[test]
 fn invalid_fields_are_invalid() {
     assert_eq!(
         Field::parse(b"This is not a valid field"),
-        Err(ParseError::MalformedField)
+        Err(HeaderParseError::MalformedField)
     );
 
     assert_eq!(
         Field::parse(b"X-Invalid-UTF-8\xFF: yes"),
-        Err(ParseError::MalformedField)
+        Err(HeaderParseError::MalformedField)
     );
 }
