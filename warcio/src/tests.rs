@@ -9,7 +9,7 @@ fn can_read_record_header() {
                    X-Multiline-Test:lol \r\n  multiline headers\r\n\
                    \r\n";
 
-    let mut expected = Header::new(1, 0);
+    let mut expected = Header::new(Version::WARC1_0);
     expected.set_field("warc-type", b"testdata".to_vec());
     expected.set_field("content-length", b"6".to_vec());
     expected.set_field("x-multiline-test", b"lol multiline headers".to_vec());

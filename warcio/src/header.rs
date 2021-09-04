@@ -8,8 +8,8 @@ use indexmap::map::IndexMap;
 use regex::bytes::Regex;
 use uncased::{AsUncased, UncasedStr};
 
-use crate::HeaderParseError;
 use crate::record::Compression;
+use crate::HeaderParseError;
 
 use super::{CTL, SEPARATORS};
 
@@ -162,12 +162,9 @@ pub struct Header {
 }
 
 impl Header {
-    pub fn new(major_version: u32, minor_version: u32) -> Self {
+    pub fn new<V: Into<Version>>(version: V) -> Self {
         Header {
-            version: Version {
-                major: major_version,
-                minor: minor_version,
-            },
+            version: version.into(),
             fields: Default::default(),
         }
     }
@@ -452,7 +449,7 @@ impl Version {
     /// WARC 1.0: ISO 28500:2009
     pub const WARC1_0: Self = Version { major: 1, minor: 0 };
     /// WARC 1.1: ISO 28500:2017
-    pub const WARC1_1: Self = Version { major: 1, minor: 0 };
+    pub const WARC1_1: Self = Version { major: 1, minor: 1 };
 
     /// Parse the version line from a record header, returning the number of bytes
     /// consumed and the version.
@@ -490,6 +487,12 @@ impl Version {
         let minor = bytes_to_u32(&bytes[minor_start..minor_end])?;
 
         Ok((minor_end + 2, Version { major, minor }))
+    }
+}
+
+impl From<(u32, u32)> for Version {
+    fn from((major, minor): (u32, u32)) -> Self {
+        Version { major, minor }
     }
 }
 
