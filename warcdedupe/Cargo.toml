@@ -11,13 +11,14 @@ name = "warcdedupe"
 [dependencies]
 warcio = { path = "../warcio" }
 
-blake3 = { version = "1.0.0", features = ["rayon"] }
+data-encoding = "2.3.2"
 flate2 = "1.0.20"
 httparse = "1.4.1"
 indicatif = "0.16.2"
 lazy_static = "1.0.0"
 log = "0.4.1"
 mime = "0.3.16"
+sha-1 = "0.9.7"
 thiserror = "1.0"
 
 # Command line handling

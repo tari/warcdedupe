@@ -201,9 +201,10 @@ where
         dedup_headers.set_field("WARC-Payload-Digest", D::format_digest(&digest));
         dedup_headers.set_field("Content-Length", format!("{}", prefix_data.len()));
         dedup_headers.set_field("WARC-Truncated", "length");
+        // TODO we have the entire prefix data, so can compute the new digest rather than dropping
+        dedup_headers.remove_field(FieldName::BlockDigest);
 
         // TODO: this seems to be writing extra garbage after the prefix data
-        // TODO: WARC-Block-Digest must be updated or removed?
         let mut dedup_body = dedup_headers.write_to(&mut self.output, self.output_compression)?;
         dedup_body.write_all(&prefix_data)?;
         Ok(ProcessOutcome::Deduplicated)

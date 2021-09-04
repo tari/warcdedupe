@@ -292,6 +292,10 @@ impl Header {
         self.fields.insert(name, value.into())
     }
 
+    pub fn remove_field<N: Borrow<FieldName>>(&mut self, name: N) -> Option<Vec<u8>> {
+        self.fields.shift_remove(name.borrow())
+    }
+
     /// Get the value of a header field as bytes.
     ///
     /// Returns None if there is no such field. The field name is

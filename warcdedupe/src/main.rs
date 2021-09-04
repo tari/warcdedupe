@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use docopt::Docopt;
 use warcio::record::Compression;
 
-use warcdedupe::digest::UrlLengthBlake3Digester;
+use warcdedupe::digest::LengthSha1Digester;
 use warcdedupe::response_log::InMemoryResponseLog;
 use warcdedupe::{Deduplicator, ProcessError};
 
@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_or(default_output_compression, Compression::guess_for_filename);
     let output = open_output_stream(args.arg_outfile);
 
-    let deduplicator = Deduplicator::<UrlLengthBlake3Digester, _, _>::new(
+    let deduplicator = Deduplicator::<LengthSha1Digester, _, _>::new(
         output,
         InMemoryResponseLog::new(),
         output_compression,
@@ -94,21 +94,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             input_compression,
         )
     } else {
-        let input_map = unsafe { memmap2::Mmap::map(&input_file)? };
-        // We do sequential access, so advise the OS of that where such a mechanism exists.
-        #[cfg(unix)]
-        unsafe {
-            use nix::sys::mman::{madvise, MmapAdvise};
-            let _ = madvise(
-                input_map.as_ptr() as *mut _,
-                input_map.len(),
-                MmapAdvise::MADV_SEQUENTIAL,
-            );
-        }
+        // Safety: downstream users of the created Cursor are not prevented from interpreting
+        // data in a way that would break if the underlying file were mutated, but as this is
+        // a binary target we will assume the user can ensure that doesn't happen.
+        let map = unsafe { SequentialMmap::of_file(&input_file)? };
+
         run_with_progress(
             !args.flag_disable_progress,
             deduplicator,
-            Cursor::new(&input_map),
+            Cursor::new(&map),
             input_compression,
         )
     }
@@ -155,5 +149,36 @@ where
         out
     } else {
         deduplicator.read_stream(input, input_compression)
+    }
+}
+
+struct SequentialMmap {
+    map: memmap2::Mmap,
+}
+
+impl SequentialMmap {
+    /// This is unsafe because some uses can trigger undefined behavior if another mapping of the
+    /// same file (perhaps in another process) mutates what appears to Rust to be an immutable
+    /// slice. See https://users.rust-lang.org/t/how-unsafe-is-mmap/19635 for detailed discussion.
+    unsafe fn of_file(file: &File) -> std::io::Result<SequentialMmap> {
+        let map = memmap2::Mmap::map(file)?;
+        // We do sequential access, so advise the OS of that where such a mechanism exists.
+        #[cfg(unix)]
+        {
+            use nix::sys::mman::{madvise, MmapAdvise};
+            let _ = madvise(
+                map.as_ptr() as *mut _,
+                map.len(),
+                MmapAdvise::MADV_SEQUENTIAL,
+            );
+        }
+
+        Ok(SequentialMmap { map })
+    }
+}
+
+impl AsRef<[u8]> for SequentialMmap {
+    fn as_ref(&self) -> &[u8] {
+        self.map.as_ref()
     }
 }

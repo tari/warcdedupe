@@ -1,7 +1,8 @@
 use std::io::BufRead;
 
+use data_encoding::BASE32;
 use std::fmt::Debug;
-use warcio::header::{FieldName, Header};
+use warcio::header::Header;
 use warcio::record::Record;
 
 pub trait Digester: Sized {
@@ -50,64 +51,48 @@ pub trait Digester: Sized {
     }
 }
 
-/// A digester that keys on the source URL, record length and BLAKE3 hash
-/// of the record contents.
-pub struct UrlLengthBlake3Digester {
+/// A digester that tracks the length and SHA-1 hash of records.
+///
+/// The output digests are base32-encoded (RFC 4648) as suggested by sections
+/// 5.8 and 5.9 of the WARC 1.1 specification.
+pub struct LengthSha1Digester {
     length: u64,
-    // TODO probably don't want this to unnecessarily limit matches:
-    // WARC-Refers-To-Target-URI is not required for revisit records and
-    // "it is not necessary that the URI of the original capture and the revisit be
-    // identical" (6.7.2).
-    url: Box<str>,
-    hasher: blake3::Hasher,
+    hasher: sha1::Sha1,
 }
 
-impl UrlLengthBlake3Digester {
-    const MIN_PARALLEL_LEN: usize = 1 << 20;
-}
+impl Digester for LengthSha1Digester {
+    type Digest = (u64, [u8; 20]);
 
-impl Digester for UrlLengthBlake3Digester {
-    type Digest = (Box<str>, u64, [u8; blake3::OUT_LEN]);
-
-    fn new(x: &Header) -> Option<Self> {
-        Some(Self {
-            length: x.content_length()?,
-            url: x
-                .get_field(FieldName::TargetURI)?
-                .to_owned()
-                .into_boxed_str(),
-            hasher: blake3::Hasher::new(),
+    fn new(header: &Header) -> Option<Self> {
+        Some(LengthSha1Digester {
+            length: header.content_length()?,
+            hasher: Default::default(),
         })
     }
 
     fn handle_data(&mut self, data: &[u8]) {
-        if data.len() < Self::MIN_PARALLEL_LEN {
-            self.hasher.update(data);
-        } else {
-            debug!("using parallel hash for payload of {} bytes!", data.len());
-            self.hasher.update_rayon(data);
-        }
+        use sha1::Digest;
+
+        self.hasher.update(data)
     }
 
     fn finalize(self) -> Self::Digest {
-        (self.url, self.length, *self.hasher.finalize().as_bytes())
+        use sha1::Digest;
+
+        let mut out = [0u8; 20];
+        out.copy_from_slice(self.hasher.finalize().as_slice());
+        (self.length, out)
     }
 
     fn format_digest(digest: &Self::Digest) -> String {
-        use std::fmt::Write;
+        let digest_len = (digest.1.len() as f32 * 8.0 / 5.0).ceil() as usize;
+        let mut out = String::with_capacity(5 + digest_len);
+        let initial_capacity = out.capacity();
 
-        let expected_len = digest.2.len() * 2 + 7;
-        let mut out = String::with_capacity(expected_len);
-        let _ = write!(&mut out, "blake3:");
-        for byte in digest.2 {
-            let _ = write!(&mut out, "{:02x}", byte);
-        }
+        out += "sha1:";
+        BASE32.encode_append(&digest.1[..], &mut out);
+        debug_assert_eq!(initial_capacity, out.len());
 
-        debug_assert_eq!(
-            out.len(),
-            expected_len,
-            "string should not need reallocation"
-        );
         out
     }
 }
