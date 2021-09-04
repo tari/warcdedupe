@@ -408,6 +408,7 @@ pub(crate) struct RecordWriter<W> {
     limit: u64,
     written: u64,
     writer: W,
+    finished: bool,
 }
 
 impl<W> RecordWriter<W> {
@@ -416,6 +417,7 @@ impl<W> RecordWriter<W> {
             limit: content_length,
             written: 0,
             writer,
+            finished: false,
         }
     }
 }
@@ -427,8 +429,13 @@ impl<W: Write> Write for RecordWriter<W> {
 
         let written = self.writer.write(&buf[..take as usize])?;
         self.written += written as u64;
+
+        // A record is always followed by CRLF2
+        if self.written == self.limit && !self.finished {
+            self.writer.write_all(b"\r\n\r\n")?;
+            self.finished = true;
+        }
         Ok(written)
-        // TODO: records must end with CRLF2!
     }
 
     fn flush(&mut self) -> std::io::Result<()> {

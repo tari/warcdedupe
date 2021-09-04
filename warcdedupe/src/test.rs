@@ -145,7 +145,7 @@ fn deduplicates_duplicate() {
         //assert_eq!(reparsed, ...)
         let mut reparsed_contents = Vec::new();
         reparsed.read_to_end(&mut reparsed_contents).unwrap();
-        drop(reparsed);
+        reparsed.finish().unwrap();
         assert_eq!(
             String::from_utf8_lossy(&reparsed_contents),
             "\
@@ -203,19 +203,17 @@ fn deduplicates_compressed() {
         let mut reparsed = Record::read_from(&mut reparse_cursor, output_compression)
             .expect("should be able to parse an emitted revisit record");
 
-        //assert_eq!(reparsed, ...)
         let mut reparsed_contents = Vec::new();
         reparsed.read_to_end(&mut reparsed_contents).unwrap();
-        drop(reparsed);
+        reparsed.finish().unwrap();
+
         assert_eq!(
             String::from_utf8_lossy(&reparsed_contents),
-            "\
-HTTP/1.1 404 Not Found\r
-Date: Sun, 28 Jan 2018 13:33:12 GMT\r
-Content-Type: text/plain\r
-Content-Length: 23\r
-\r
-"
+            "HTTP/1.1 404 Not Found\r\n\
+             Date: Sun, 28 Jan 2018 13:33:12 GMT\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Length: 23\r\n\
+             \r\n"
         );
     }
 
