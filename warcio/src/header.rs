@@ -111,7 +111,14 @@ impl Borrow<UncasedStr> for FieldName {
 // so Eq, Ord and Hash are implemented in terms of the case-insensitive field name.
 impl PartialEq for FieldName {
     fn eq(&self, other: &Self) -> bool {
-        self.as_ref().as_uncased().eq(other.as_ref())
+        match (self, other) {
+            (FieldName::Other(_), _) | (_, FieldName::Other(_)) =>
+                self.as_ref().as_uncased().eq(other.as_ref()),
+            // If neither operand is Other, we can simply compare the discriminant and avoid
+            // doing a string comparison
+            (l, r) =>
+                std::mem::discriminant(l) == std::mem::discriminant(r),
+        }
     }
 }
 
@@ -125,7 +132,7 @@ impl PartialOrd for FieldName {
 
 impl Ord for FieldName {
     fn cmp(&self, other: &Self) -> Ordering {
-        <Self as PartialOrd>::partial_cmp(self, other).unwrap()
+        self.as_ref().as_uncased().cmp(other.as_ref())
     }
 }
 
