@@ -53,10 +53,10 @@ where
 
         // A record ID is required by the spec to be present, and we need to refer
         // to an original record by ID. Noncompliant records will simply be copied.
-        let record_id = match record.header.record_id() {
+        let record_id = match record.header.get_field(FieldName::RecordId) {
             Some(id) => id,
             None => {
-                trace!("Skip record with no ID: impossible to WARC-Refers-To");
+                warn!("Skipping record with no ID: impossible to WARC-Refers-To");
                 return Ok(NeedsCopy);
             }
         };
@@ -69,7 +69,7 @@ where
         // useful only for responses.
         // TODO: truncated records might have the same payload after truncation as another truncated
         // record but the truncated part might differ. Possibly ignore truncated records.
-        if record.header.warc_type() != Some("response") {
+        if record.header.get_field(FieldName::Type) != Some("response") {
             trace!(
                 "Skip non-response record {:?} of type {:?}",
                 record_id,
@@ -90,7 +90,7 @@ where
         });
         let uri_is_http = record
             .header
-            .field_uri("WARC-Target-URI")
+            .get_field(FieldName::TargetURI)
             .map_or(false, |uri| {
                 uri.starts_with("http:") || uri.starts_with("https:")
             });
@@ -146,11 +146,12 @@ where
         }
 
         // Digest payload and record the digest, checking for a match
+        // TODO: if an HTTP response uses chunked encoding, that may need to be handled here.
         let digest = match D::digest_record(record)? {
             None => {
                 debug!(
                     "Record {} is not eligible for deduplication; skipping",
-                    record.header.record_id().unwrap_or("<unknown>")
+                    record.header.record_id()
                 );
                 return Ok(NeedsCopy);
             }
@@ -158,14 +159,11 @@ where
         };
         debug!("Digested record to {:?}", digest);
 
-        let record_id = record
-            .header
-            .record_id()
-            .expect("Record-ID presence should have been validated earlier");
+        let record_id = record.header.record_id();
         // It is recommended that revisit records refer to the original target URI and date,
         // but not mandatory.
-        let timestamp = record.header.warc_date();
-        let target = record.header.field_uri("WARC-Target-URI");
+        let timestamp = record.header.get_field(FieldName::Date);
+        let target = record.header.get_field(FieldName::TargetURI);
         let (original_id, original_uri, original_date) =
             match self.log.add(record_id, target, timestamp, digest.clone()) {
                 None => return Ok(NeedsCopy),

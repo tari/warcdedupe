@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "warcdedupe"
-version = "0.1.0"
+version = "0.2.0-pre"
 dependencies = [
  "data-encoding",
  "docopt",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "warcio"
-version = "0.2.0"
+version = "0.3.0-pre"
 dependencies = [
  "buf_redux",
  "chrono",

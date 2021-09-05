@@ -65,7 +65,7 @@ impl Digester for LengthSha1Digester {
 
     fn new(header: &Header) -> Option<Self> {
         Some(LengthSha1Digester {
-            length: header.content_length()?,
+            length: header.content_length(),
             hasher: Default::default(),
         })
     }

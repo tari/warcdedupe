@@ -1,105 +1,248 @@
+//! WARC record header data structures.
+
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::io::BufRead;
-use std::str::{self, FromStr};
+use std::str;
 
 use indexmap::map::IndexMap;
 use regex::bytes::Regex;
 use uncased::{AsUncased, UncasedStr};
 
 use crate::record::Compression;
+use crate::version::Version;
 use crate::HeaderParseError;
 
 use super::{CTL, SEPARATORS};
 
 /// The name of a WARC header field.
 ///
-/// Field names are case-insensitive, so the [`Eq`], [`Ord`] and [`Hash`] implementations for this
-/// type are all case-insensitive.
+/// Field names are case-insensitive strings made up of one or more ASCII characters excluding
+/// control characters (values 0-31 and 127) and separators (`()<>@,;:\"/[]?={} \t`). A `FieldName`
+/// can be constructed from arbitrary input using the [`From<str>` impl](#impl-From<S>), or a
+/// variant may be directly constructed. A string representation of a parsed name can be obtained
+/// through [`AsRef<str>`](#impl-AsRef<str>).
+///
+/// Comparison, ordering, and hashing of field names is always case-insensitive, and the standard
+/// variants normalize their case to those used by the standard. Unrecognized values will preserve
+/// case when converted to strings but still compare case-insensitively.
+///
+/// ```
+/// # use warcio::FieldName;
+/// let id = FieldName::RecordId;
+/// // Conversion from string via From
+/// let parsed_id: FieldName = "warc-record-id".into();
+///
+/// assert_eq!(id, parsed_id);
+/// // Input was cased differently: standard name has been normalized
+/// assert_eq!("WARC-Record-ID", parsed_id.as_ref());
+/// // Only comparison of FieldNames is case-insensitive, a string is not
+/// assert_eq!(parsed_id, "wArC-ReCoRd-Id".into());
+/// assert_ne!(parsed_id.as_ref(), "wArC-ReCoRd-Id");
+/// ```
 #[derive(Debug, Clone)]
 pub enum FieldName {
-    /// WARC-Record-ID: mandatory. A globally unique identifier for a record.
+    /// `WARC-Record-ID`: a globally unique identifier for a record.
     ///
-    /// A URI delimited by angle brackets: `"<" uri ">"`.
+    /// This field is mandatory and must be present in a standards-compliant record.
+    /// Values should consist of a URI delimited by angle brackets: `"<" uri ">"`. Often
+    /// the URI describes a UUID consistent with [RFC 4122](https://dx.doi.org/10.17487/rfc4122),
+    /// such as `urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6`.
     RecordId,
-    /// Content-Length: mandatory. The number of octets in the record block.
+    /// `Content-Length`: The number of octets (bytes) in a record block.
     ///
-    /// One or more ASCII digits.
+    /// This field is mandatory and must be present in a standards-compliant record.
+    /// Values should consist of one or more [ASCII](https://dx.doi.org/10.17487/rfc0020) digits.
     ContentLength,
-    /// WARC-Date: mandatory. The instant that record data capture began.
+    /// `WARC-Date`: the instant that record data capture of a record began.
     ///
     /// This must be a UTC timestamp according to the W3C profile of ISO 8601,
-    /// such as YYYY-MM-DDThh:mm:ssZ. Fractional parts of a second may be included,
+    /// such as `YYYY-MM-DDThh:mm:ssZ`. Fractional parts of a second may be included,
     /// but must have between 1 and 9 digits (inclusive) if present.
+    ///
+    /// This field is mandatory and must be present in a standards-compliant record.
     Date,
-    /// WARC-Type: mandatory. The type of record this is.
+    /// `WARC-Type`: the type of a record, corresponding to a [`RecordType`].
+    ///
+    /// This field is mandatory and must be present in a standards-compliant record.
     Type,
-    /// Content-Type: optional. The RFC 2045 MIME type of the record's data block.
+    /// `Content-Type`: the [RFC 2045](https://dx.doi.org/10.17487/rfc2045) MIME type
+    /// of a record's data block.
     ///
     /// If absent, readers may attempt to identify the resource type by inspecting
-    /// its contents and URI and otherwise treat it as application/octet-stream.
+    /// its contents and URI, or otherwise treat it as `application/octet-stream`.
     ContentType,
-    /// WARC-Concurrent-To: optional, may appear multiple times. The [`RecordId`] of
-    /// any records created as part of the same capture event.
+    /// `WARC-Concurrent-To`: the [`RecordId`](Self::RecordId) of any records created as part of the same
+    /// capture event as a record.
+    ///
+    /// A capture event includes all information automatically gathered by a retrieval of a single
+    /// [`TargetURI`](Self::TargetURI), such as a [`Request`](RecordType::Request) record and its
+    /// associated [`Response`](RecordType::Response).
+    ///
+    /// This field may appear multiple times on a single record, but due to API limitations
+    /// this library does not currently support that.
+    // TODO support multiple Concurrent-To values per record.
     ConcurrentTo,
-    /// WARC-Block-Digest: optional. A `labelled-digest` of the full record block.
+    /// `WARC-Block-Digest`: a `labelled-digest` of a complete record block.
+    ///
+    /// A `labelled-digest` has the form `algorithm ":" digest-value`, where the algorithm and
+    /// digest value consist of any number of tokens. Although the specification does not specify
+    /// any particular hash algorithm or digest representation, it uses
+    /// [SHA-1](https://dx.doi.org/10.17487/rfc3174) with a [RFC 4648
+    /// base32](https://dx.doi.org/10.17487/rfc4648)-encoded as an example, exemplified by the
+    /// string `sha1:3EF4GH5IJ6KL7MN8OPQAB2CD`; many tools adopt this same format.
     BlockDigest,
-    /// WARC-Payload-Digest: optional. A `labelled-digest` of the record payload (usually
-    /// the RFC 2616 `entity-body` of an HTTP message).
+    /// `WARC-Payload-Digest`: a `labelled-digest` of a record's payload, in the same format as a
+    /// [`BlockDigest`](FieldName::BlockDigest) value.
+    ///
+    /// The payload of a record is not necessarily equivalent to the record block. In particular,
+    /// the payload of a block with [`ContentType`](FieldName::ContentType) `application/http` is the
+    /// [RFC 2616](https://dx.doi.org/10.17487/rfc2616) `entity-body`; the HTTP request or response
+    /// body, excluding any headers.
+    ///
+    /// The payload digest of a record may also refer to data that is not present in the record
+    /// block at all, such as when a [`Revisit`](RecordType::Revisit) record truncates duplicated
+    /// data or in a segmented record.
     PayloadDigest,
-    /// WARC-IP-Address: optional. An IP address contacted to retrieve record content.
+    /// `WARC-IP-Address`: an IP address that was contacted to retrieve record content.
+    ///
+    /// For IPv4 addresses, the permitted format is a dotted quad like `127.0.0.1`. Acceptable IPv6
+    /// address formats are as specified by section 2.2 of
+    /// [RFC 4291](https://dx.doi.org/10.17487/rfc4291).
+    ///
+    /// This is most often the IP address from which an HTTP resource was retrieved at capture-time,
+    /// corresponding to the address resolved from the block's [`TargetURI`](Self::TargetURI).
     IpAddress,
-    /// WARC-Refers-To: optional. The record ID of a single record for which the present record
+    /// `WARC-Refers-To`: the record ID of a single record for which the present record
     /// holds additional content.
     ///
-    /// May be used with `metadata`, `revisit` or `conversion` record types.
-    RefersTo,
-    /// WARC-Refers-To-Target-URI: optional. The [`TargetURI`] of the record referred to by
-    /// [`RefersTo`].
-    RefersToTargetURI,
-    /// WARC-Refers-To-Date: optional. The [`Date`] of the record referred to by [`RefersTo`].
-    RefersToDate,
-    /// WARC-Target-URI: optional. The original URI that provided the record content.
+    /// The field value is a URI surrounded by angle brackets: `<uri>`.
     ///
-    /// Usually this is the URI requested by a web crawler.
+    /// [`Revisit`](RecordType::Revisit) or [`Conversion`](RecordType::Conversion) records use this
+    /// field to indicate a preceding record which helps determine the record's content. It can also
+    /// be used to associate a [`Metadata`](RecordType::Metadata) record with the record it
+    /// describes.
+    RefersTo,
+    /// `WARC-Refers-To-Target-URI`: the [`TargetURI`](Self::TargetURI) of the record referred to by
+    /// [`RefersTo`](Self::RefersTo).
+    RefersToTargetURI,
+    /// `WARC-Refers-To-Date`: the [`Date`](Self::Date) of the record referred to by
+    /// [`RefersTo`](Self::RefersTo).
+    RefersToDate,
+    /// `WARC-Target-URI`: the original URI that provided the record content.
+    ///
+    /// In the context of web crawling, this is the URI that a crawler sent a request to retrieve.
+    /// For indirect records such as [metadata](RecordType::Metadata) or
+    /// [conversion](RecordType::Conversion)s, the value is a copy of the target URI from the
+    /// original record.
     TargetURI,
-    /// WARC-Truncated: optional. The reason that a record contains a truncated version of the
+    /// `WARC-Truncated`: the reason that a record contains a truncated version of the
     /// original resource.
     ///
-    /// Writers may wish to limit time or other resources used to retrieve resources, and if the
-    /// resource is truncated the reason for truncation should be recorded here.
+    /// Reasons a writer may specify when truncating a record (the value of this field) are
+    /// non-exhaustively enumerated by the standard:
+    ///  * `length`: the record is too large
+    ///  * `time`: the record took too long to capture
+    ///  * `disconnect`: the resource was disconnected from a network
+    ///  * `unspecified`: some other or unknown reason
     Truncated,
-    /// WARC-Warcinfo-ID: optional. The ID of the warcinfo record associated with this record.
+    /// `WARC-Warcinfo-ID`: the [ID](Self::RecordId) of the [warcinfo](RecordType::Info) record
+    /// associated with this record.
     ///
-    /// Typically used when the context of a record is lost such as by splitting a collection
-    /// of records into individual files.
+    /// This field is typically used when the context of a record is lost, such as when a collection
+    /// of records is split into individual files. The value is a URI surrounded by angle brackets:
+    /// `<uri>`.
     InfoID,
-    /// WARC-Filename: optional. The name of the file containing the current warcinfo record.
+    /// `WARC-Filename`: the name of the file containing the current
+    /// [warcinfo](RecordType::Info) record.
     ///
-    /// Only used in warcinfo records.
+    /// This field may only be used in info records.
     Filename,
-    /// WARC-Profile: optional. The kind of analysis and handling applied in a revisit record.
+    /// `WARC-Profile`: the kind of analysis and handling applied to create a
+    /// [revisit](RecordType::Revisit) record, specified as a URI.
+    ///
+    /// Readers shall not attempt to interpret records for which the profile is not recognized. The
+    /// WARC 1.1 standard defines two profiles and allows for others:
+    ///  * `http://netpreserve.org/warc/1.1/revisit/identical-payload-digest`
+    ///  * `http://netpreserve.org/warc/1.1/revisit/server-not-modified`
     Profile,
-    /// WARC-Identified-Payload-Type: the content-type discovered by inspecting a record payload.
+    /// `WARC-Identified-Payload-Type`: the content-type discovered by inspecting a record payload.
+    ///
+    /// Writers *shall not* blindly promote HTTP `Content-Type` values without inspecting the
+    /// payload when creating records- such values may be incorrect. Users should perform an
+    /// independent check to arrive at a value for this field.
     IdentifiedPayloadType,
-    /// WARC-Segment-Number: the current record's ordering in a sequence of segmented record.
+    /// `WARC-Segment-Number`: the current record's ordering in a sequence of segmented records.
     ///
-    /// Mandatory for continuation records.
+    /// This field is required for [continuation](RecordType::Continuation) records as well as for
+    /// any record that has associated continuations. In the first record its value is `1`, and
+    /// for subsequent continuations the value is incremented.
     SegmentNumber,
-    /// WARC-Segment-Origin-ID: the ID of the starting record in a series of segmented records.
+    /// `WARC-Segment-Origin-ID`: the ID of the starting record in a series of segmented records.
     ///
-    /// Mandatory for continuation records.
+    /// This field if required for [continuation](RecordType::Continuation) records with the value
+    /// being a URI surrounded by angle brackets, where the URI is the
+    /// [ID of the first record](Self::RecordId) in the continuation sequence.
     SegmentOriginID,
-    /// WARC-Segment-Total-Length: the total length of concatenated segmented content blocks.
+    /// `WARC-Segment-Total-Length`: the total length of concatenated segmented content blocks.
     ///
-    /// Mandatory for continuation records.
+    /// This field is required for the last [continuation](RecordType::Continuation) record of a
+    /// series, and *shall not* be used elsewhere.
     SegmentTotalLength,
     /// Any unrecognized field name.
+    ///
+    /// The WARC format permits arbitrarily-named extension fields, and specifies that software
+    /// *shall* ignore fields with unrecognized names. This variant allows their representation and
+    /// processing but does not ascribe any particular meaning to unrecognized names.
+    ///
+    /// `Other` should generally not be manually constructed, instead using the [`From`]
+    /// impl to convert from a string. However, an `Other` value that matches the string
+    /// representation of a known field name will behave the same as the variant matching
+    /// that field name (but may have worse performance characteristics).
     Other(Box<str>),
 }
 
 include!(concat!(env!("OUT_DIR"), "/header_field_types.rs"));
+
+impl FieldName {
+    /// Returns `true` if a field's value consists of a bare URI.
+    ///
+    /// This is useful for handling the difference in grammar between WARC 1.1 and earlier versions:
+    /// while earlier versions define a URI as `"<" <'URI' per RFC3986> ">"` (surrounded by angle
+    /// brackets), WARC 1.1 removes the angle brackets from the grammar describing a URI, and
+    /// explicitly adds the angle brackets to some (but not all) fields.
+    /// This function will return `true` for those fields that do not have angle brackets in a
+    /// WARC 1.1 record but do in earlier versions, and `false` for all other fields.
+    ///
+    /// Users will generally not need to use this function directly; field values will be
+    /// transformed as necessary when accessing values through a [`Header`] (brackets added when
+    /// writing a value to a pre-1.1 record, and removed when reading).
+    pub fn value_is_bare_uri(&self) -> bool {
+        use FieldName::*;
+        match self {
+            TargetURI | RefersToTargetURI | Profile => true,
+            // Types that include angle brackets regardless of WARC version: "<" uri ">"
+            RecordId | ConcurrentTo | RefersTo | InfoID | SegmentOriginID => false,
+            // Types that don't contain URIs
+            ContentLength
+            | Date
+            | Type
+            | ContentType
+            | BlockDigest
+            | PayloadDigest
+            | IpAddress
+            | RefersToDate
+            | Truncated
+            | Filename
+            | IdentifiedPayloadType
+            | SegmentNumber
+            | SegmentTotalLength => false,
+            // No particular interpretation
+            Other(_) => false,
+        }
+    }
+}
 
 impl Borrow<UncasedStr> for FieldName {
     fn borrow(&self) -> &UncasedStr {
@@ -112,12 +255,12 @@ impl Borrow<UncasedStr> for FieldName {
 impl PartialEq for FieldName {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (FieldName::Other(_), _) | (_, FieldName::Other(_)) =>
-                self.as_ref().as_uncased().eq(other.as_ref()),
+            (FieldName::Other(_), _) | (_, FieldName::Other(_)) => {
+                self.as_ref().as_uncased().eq(other.as_ref())
+            }
             // If neither operand is Other, we can simply compare the discriminant and avoid
             // doing a string comparison
-            (l, r) =>
-                std::mem::discriminant(l) == std::mem::discriminant(r),
+            (l, r) => std::mem::discriminant(l) == std::mem::discriminant(r),
         }
     }
 }
@@ -132,7 +275,7 @@ impl PartialOrd for FieldName {
 
 impl Ord for FieldName {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.as_ref().as_uncased().cmp(other.as_ref())
+        self.as_ref().as_uncased().cmp(other.as_ref().as_uncased())
     }
 }
 
@@ -195,9 +338,10 @@ impl Header {
 
     /// Write the current record to the given output stream.
     ///
-    /// The returned [`Write`] adapter will accept only as many bytes as the `Content-Length`
-    /// header declares and will panic if that header is missing or does not have a valid
-    /// base-10 integer value (consisting only of ASCII digits).
+    /// The returned `Write`r will accept only as many bytes as the [`Content-Length`](FieldName::ContentLength)
+    /// header declares and will panic if that field is missing or does not have a valid
+    /// base-10 integer value (consisting only of ASCII digits). Further writes after the
+    /// specified number of bytes will do nothing.
     ///
     /// While the output adapter will only write up to the given number of bytes, it will
     /// not pad the output if dropped before `Content-Length` bytes have been written. Failing
@@ -252,8 +396,7 @@ impl Header {
         // record body: Content-Length octets of arbitrary data
         Ok(crate::record::RecordWriter::new(
             dest,
-            self.content_length()
-                .expect("Record::write_to requires the record have a valid Content-Length"),
+            self.content_length(),
         ))
     }
 
@@ -262,28 +405,58 @@ impl Header {
     /// Although the WARC specification does not permit values that are not also valid Rust strings,
     /// users that wish to be lenient in accepting malformed records may wish to relax that
     /// requirement by using this function.
-    pub fn get_field_bytes<F: AsUncased>(&self, field: F) -> Option<&[u8]> {
-        self.fields.get(field.as_uncased()).map(Vec::as_slice)
+    ///
+    /// ## URL translation
+    ///
+    /// For fields that are [defined to contain a bare URI by the
+    /// specification](FieldName::value_is_bare_uri), this function will strip surrounding angle
+    /// brackets from the value if the [WARC version](Version) of the record is less than 1.1
+    /// and they are present. This hides the changed definition of a URL in the standard from
+    /// version 1.1.
+    ///
+    /// For example, a `WARC-Record-ID` field in WARC 1.0 might have the raw value
+    /// "<urn:uuid:ea07dfdd-9452-4b7d-add0-b2c538af5fa5>" but the same value in WARC 1.1 has the
+    /// value "urn:uuid:ea07dfdd-9452-4b7d-add0-b2c538af5fa5" (without angle brackets). This
+    /// function would return the value without brackets for all record versions.
+    pub fn get_field_bytes<F: Into<FieldName>>(&self, field: F) -> Option<&[u8]> {
+        let field: FieldName = field.into();
+
+        let mut value = self.fields.get(&field).map(Vec::as_slice)?;
+        if field.value_is_bare_uri() && self.version <= Version::WARC1_0 {
+            if value.first() == Some(&b'<') && value.last() == Some(&b'>') {
+                value = &value[1..value.len() - 1];
+            }
+        }
+        Some(value)
     }
 
     /// Get the value of a header field, or None if it does not exist or is not a valid Rust string.
     ///
-    /// If you want to handle potentially malformed records, [`get_field_bytes`] allows you to
-    /// accept values that are not acceptable Rust strings if the actual value is not important.
+    /// This function transforms fields that are bare URIs in the same way as
+    /// [`get_field_bytes`](Header::get_field_bytes), stripping angle brackets from
+    /// the value when the record's WARC version is pre-1.1.
+    ///
+    /// If you want to handle potentially malformed records,
+    /// [`get_field_bytes`](Header::get_field_bytes) allows you to
+    /// access values that are not acceptable Rust strings (that is, they are not valid UTF-8).
     /// However, because such a value would be malformed according to the specification, it should
     /// rarely be required.
-    pub fn get_field<F: AsUncased>(&self, field: F) -> Option<&str> {
+    pub fn get_field<F: Into<FieldName>>(&self, field: F) -> Option<&str> {
         str::from_utf8(self.get_field_bytes(field)?).ok()
     }
 
-    pub fn field_exists<F: AsUncased>(&self, field: F) -> bool {
+    /// Return `true` if a field with the given name currently exists in this header.
+    pub fn field_exists<F: Into<FieldName>>(&self, field: F) -> bool {
         self.get_field_bytes(field).is_some()
     }
 
     /// Set the value of a header field, returning the old value (if any).
     ///
     /// This function will panic if the provided name contains characters that are not
-    /// permitted in `field-name` context.
+    /// permitted in `field-name` context. The value will have angle brackets added if
+    /// the field value is a [bare URI](FieldName::value_is_bare_uri) and the record's WARC
+    /// version is pre-1.1, performing the opposite transformation of
+    /// [`get_field_bytes`](Header::get_field_bytes).
     pub fn set_field<N: Into<FieldName>, V: Into<Vec<u8>>>(
         &mut self,
         name: N,
@@ -296,50 +469,18 @@ impl Header {
             "field name {:?} contains illegal characters",
             name
         );
-        self.fields.insert(name, value.into())
+
+        let mut value = value.into();
+        if name.value_is_bare_uri() && self.version < Version::WARC1_1 {
+            value.reserve_exact(2);
+            value.insert(0, b'<');
+            value.push(b'>');
+        }
+        self.fields.insert(name, value)
     }
 
     pub fn remove_field<N: Borrow<FieldName>>(&mut self, name: N) -> Option<Vec<u8>> {
         self.fields.shift_remove(name.borrow())
-    }
-
-    /// Get the value of a header field as bytes.
-    ///
-    /// Returns None if there is no such field. The field name is
-    /// case-insensitive.
-    #[deprecated(note = "Use get_field() instead")]
-    pub fn field<S: AsRef<str>>(&self, name: S) -> Option<&[u8]> {
-        self.fields
-            .get(UncasedStr::new(name.as_ref()))
-            .map(Vec::as_slice)
-    }
-
-    /// Get the value of a header field as a string.
-    ///
-    /// Returns None if there is no such field or its value is not a valid
-    /// string. The field name is case-insensitive.
-    #[deprecated(note = "Use get_field_str() instead")]
-    pub fn field_str<S: AsRef<str>>(&self, name: S) -> Option<&str> {
-        self.field(UncasedStr::new(name.as_ref()))
-            .and_then(|b| str::from_utf8(b).ok())
-    }
-
-    /// Get the value of a header field that is a URI as a string.
-    ///
-    /// This handles the difference between the definition of a URI in the WARC 1.0
-    /// and WARC 1.1 standards, where the former specifies angle brackets (<>) around
-    /// the URI and the latter doesn't, by stripping the brackets if present.
-    ///
-    /// Returns None if no such header exists or its value is not a valid string.
-    pub fn field_uri<S: AsRef<str>>(&self, name: S) -> Option<&str> {
-        let s = self.field_str(name)?;
-        // Trim brackets if present to return only the URI, but
-        // only if both are present- preserve weird (unmatched) brackets.
-        Some(
-            s.strip_prefix('<')
-                .and_then(|s| s.strip_suffix('>'))
-                .unwrap_or(s),
-        )
     }
 
     pub fn set_version<V: Into<Version>>(&mut self, version: V) {
@@ -349,67 +490,74 @@ impl Header {
         // brackets from fields that have URI values on access.
     }
 
-    /// Get the WARC-Record-ID field value.
+    /// Get the [`WARC-Record-ID`](FieldName::RecordId) field value.
     ///
-    /// Returns `None` if the field is absent or is not a valid `str`.
-    ///
-    /// This is a mandatory field, but in the interest of parsing leniency is
-    /// is not required to exist or have any particular value in order to parse
-    /// a record header.
+    /// `WARC-Record-ID` is a mandatory WARC field, so if it is not present this
+    /// function will panic. If the caller wishes to be lenient in this situation,
+    /// use [`get_field`](Header::get_field) to read the field instead.
     ///
     /// Note that a valid value is assumed to be a valid `str` because the
-    /// record ID is specified to be a RFC 3986 URI, which are always valid
-    /// ASCII (and therefore UTF-8) strings when well-formed.
-    pub fn record_id(&self) -> Option<&str> {
-        // TODO make this panic if the field is missing; callers that want to be lenient can
-        // use get_field (and do the same for other field-specific functions).
-        self.field_str("WARC-Record-ID")
+    /// record ID is specified to be a [RFC 3986](https://dx.doi.org/10.17487/rfc3986) URI,
+    /// which are always valid ASCII (and therefore UTF-8) strings when well-formed.
+    pub fn record_id(&self) -> &str {
+        self.get_field(FieldName::RecordId)
+            .expect("record header does not have a WARC-Record-ID")
     }
 
-    /// Get the Content-Length field value.
+    /// Get the record [`Content-Length`](FieldName::ContentLength) or panic.
     ///
-    /// Returns `None` if the field is absent or does not represent a valid
-    /// content length.
-    ///
-    /// This is a mandatory field, but in the interest of parsing leniency it
-    /// is not required to exist or have any particular value in order to parse
-    /// a record header.
-    pub fn content_length(&self) -> Option<u64> {
-        self.field_str("Content-Length")
-            .and_then(|s| str::parse::<u64>(s).ok())
+    /// `Content-Length` is a mandatory WARC field, so if it is not present or does not
+    /// represent a valid length, this function will panic. If the caller wishes to be
+    /// lenient and accept records without comprehensible length, use
+    /// [`content_length_lenient`](Header::content_length_lenient) or
+    /// [`get_field`](Header::get_field) to read as an optional value instead.
+    pub fn content_length(&self) -> u64 {
+        self.get_field(FieldName::ContentLength)
+            .expect("record header does not have a Content-Length")
+            .parse()
+            .expect("record Content-Length is not a valid integer")
     }
 
-    /// Get the WARC-Date field value, parsed as a `DateTime`.
+    /// Get the record `Content-Length`, if valid.
     ///
-    /// Equivalent to parsing the result of [warc_date] as a datetime in the
-    /// format dictated by the WARC specification.
+    /// If not present or not parseable as an integer, returns None. If the None
+    /// case is uninteresting, use [`content_length`](Header::content_length) to panic instead
+    /// if the value is missing or invalid.
+    pub fn content_length_lenient(&self) -> Option<u64> {
+        self.get_field(FieldName::ContentLength)?.parse().ok()
+    }
+
+    /// Get the [`WARC-Date`](FieldName::Date) field value, parsed as a `DateTime`.
+    ///
+    /// Equivalent to parsing the result of [`warc_date`] as a datetime in the
+    /// format dictated by the WARC specification, and panics if the field is
+    /// malformed or missing. Callers should use [`get_field`] and parse the value
+    /// themselves to avoid panicking if required.
     #[cfg(feature = "chrono")]
-    pub fn warc_date_parsed(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn warc_date_parsed(&self) -> chrono::DateTime<chrono::Utc> {
         // YYYY-MM-DDThh:mm:ssZ per WARC-1.0. This is valid RFC3339, which is
         // itself valid ISO 8601. We're slightly lenient in accepting non-UTC
         // zone offsets.
         use chrono::{DateTime, Utc};
-        self.field_str("WARC-Date")
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|dt| dt.with_timezone(&Utc))
+        DateTime::parse_from_rfc3339(s)
+            .expect("WARC-Date field cannot be parsed as RTC3339 datetime")
+            .with_timezone(&Utc)
     }
 
-    /// Get the WARC-Date field value.
+    /// Get the [`WARC-Date`](FieldName::Date) field value or panic.
     ///
-    /// Returns `None` if the field is absent or is not a valid string.
-    ///
-    /// This is a mandatory field, but in the interest of parsing leniency it
-    /// is not required to exist or have any particular value in order to parse
-    /// record header.
-    pub fn warc_date(&self) -> Option<&str> {
-        self.field_str("WARC-Date")
+    /// `WARC-Date` is a mandatory field, so this function panics if it is not present.
+    /// If the caller wishes to be lenient, use [`get_field`](Self::get_field) to avoid panicking.
+    pub fn warc_date(&self) -> &str {
+        self.get_field(FieldName::Date)
+            .expect("record header does not have a WARC-Date field")
     }
 
-    /// Get the WARC-Type field value.
+    /// Get the [`WARC-Type`](FieldName::Type) field value or panic.
     ///
-    /// This is a mandatory field, but in the interest of parsing leniency it
-    /// is not required to exist or be a valid string in order to parse a
-    /// record header.
+    /// Because `WARC-Type` is a mandatory field, this function will panic if the
+    /// field is not present. Callers should use [`get_field`](Self::get_field) to gracefully handle
+    /// that case.
     ///
     /// The WARC specification non-exhausively defines the following record
     /// types:
@@ -426,84 +574,10 @@ impl Header {
     /// Additional types are permitted as core format extensions. Creators of
     /// extensions are encouraged by the standard to discuss their intentions
     /// within the IIPC.
-    pub fn warc_type(&self) -> Option<&str> {
-        self.field_str("WARC-Type")
-    }
-}
-
-/// The version of a WARC record.
-///
-/// Versions 0.9, 1.0 and 1.1 are all well-known, corresponding to the IIPC draft
-/// WARC specification, ISO 28500 and ISO 28500:2016, respectively.
-///
-/// No particular value for the version is assumed, just that one is specified.
-/// Users should validate the version number if desired (such as to ignore records
-/// with newer versions).
-///
-/// Versions for which a standards document exist can be conveniently expressed as
-/// a [`StandardVersion`] which may be compared with a `Version` and converted to
-/// one via the [`Into`] implementation.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub struct Version {
-    /// The integer part of the version number.
-    ///
-    /// In '12.345', this is 12.
-    pub major: u32,
-    /// The fractional part of the version number.
-    ///
-    /// In '12.345', this is 345.
-    pub minor: u32,
-}
-
-impl Version {
-    // TODO: WARC 0.9? http://archive-access.sourceforge.net/warc/warc_file_format-0.9.html
-    /// WARC 1.0: ISO 28500:2009
-    pub const WARC1_0: Self = Version { major: 1, minor: 0 };
-    /// WARC 1.1: ISO 28500:2017
-    pub const WARC1_1: Self = Version { major: 1, minor: 1 };
-
-    /// Parse the version line from a record header, returning the number of bytes
-    /// consumed and the version.
-    pub fn parse(bytes: &[u8]) -> Result<(usize, Version), HeaderParseError> {
-        fn bytes_to_u32(bytes: &[u8]) -> Result<u32, HeaderParseError> {
-            match str::from_utf8(bytes).map(u32::from_str) {
-                Ok(Ok(x)) => Ok(x),
-                Err(_) | Ok(Err(_)) => Err(HeaderParseError::invalid_signature(bytes)),
-            }
-        }
-
-        if !bytes.starts_with(b"WARC/") {
-            return Err(HeaderParseError::invalid_signature(&bytes[..5]));
-        }
-        let major_start = 5;
-        let major_end = match bytes[major_start..].iter().position(|&x| x == b'.') {
-            None => {
-                return Err(HeaderParseError::invalid_signature(
-                    &bytes[..major_start + 4],
-                ))
-            }
-            Some(i) => i + major_start,
-        };
-        let major = bytes_to_u32(&bytes[major_start..major_end])?;
-
-        let minor_start = major_end + 1;
-        let minor_end = match bytes[minor_start..].windows(2).position(|x| x == b"\r\n") {
-            None => {
-                return Err(HeaderParseError::invalid_signature(
-                    &bytes[..minor_start + 4],
-                ))
-            }
-            Some(i) => i + minor_start,
-        };
-        let minor = bytes_to_u32(&bytes[minor_start..minor_end])?;
-
-        Ok((minor_end + 2, Version { major, minor }))
-    }
-}
-
-impl From<(u32, u32)> for Version {
-    fn from((major, minor): (u32, u32)) -> Self {
-        Version { major, minor }
+    // TODO this should return a RecordType instead
+    pub fn warc_type(&self) -> &str {
+        self.get_field(FieldName::Type)
+            .expect("record header does not have a WARC-Type field")
     }
 }
 

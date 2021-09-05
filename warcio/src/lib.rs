@@ -45,11 +45,17 @@ pub mod header;
 pub mod record;
 #[cfg(test)]
 mod tests;
+mod version;
+
+pub use header::{RecordType, FieldName, Header};
+pub use version::Version;
 
 /// Reasons it may be impossible to parse a WARC header.
 #[derive(Debug, Error)]
 pub enum HeaderParseError {
-    /// The WARC/m.n signature is not present or invalid.
+    /// The WARC/m.n signature marking the start of a record is not present or invalid.
+    ///
+    /// The contained value is a UTF-8 interpretation of the data that was attempted to be parsed.
     #[error("WARC signature missing or invalid (near \"{0}\")")]
     InvalidSignature(String),
     /// A header field was malformed or truncated.
@@ -58,7 +64,7 @@ pub enum HeaderParseError {
     /// An I/O error occured while trying to read the input.
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
-    /// Reached end of input.
+    /// The parser reached the end of the input before the end of the WARC header.
     #[error("input ended before end of header")]
     Truncated,
 }

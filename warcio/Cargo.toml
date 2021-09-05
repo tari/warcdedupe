@@ -1,12 +1,11 @@
 [package]
 name = "warcio"
-version = "0.2.0"
+version = "0.3.0-pre"
 authors = ["Peter Marheine <peter@taricorp.net>"]
 edition = "2018"
 
 description = "A library for reading and writing WARC files"
 repository = "https://gitlab.com/taricorp/warcdedupe"
-readme = "README.md"
 license = "BSD-3-Clause"
 
 categories = ["science"]

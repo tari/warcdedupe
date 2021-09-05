@@ -1,3 +1,4 @@
+//! Operations on complete WARC records.
 use super::HeaderParseError;
 use crate::header::get_record_header;
 use buf_redux::BufReader;
@@ -273,9 +274,9 @@ where
 {
     /// Read a record from an input stream.
     ///
-    /// This allocates a new buffer on every invocation, which can be very costly because buffers
-    /// are zeroed on allocation. If reading many records, prefer to use [`read_buffered_from`] to
-    /// reuse a buffer across records.
+    /// This allocates a new buffer on every invocation, which can be costly.
+    /// If reading many records, prefer to use [`Self::read_buffered_from`] to reuse a
+    /// buffer across records.
     pub fn read_from(reader: R, compression: Compression) -> Result<Self, InvalidRecord> {
         let buffer = Buffer::with_capacity(8 << 10);
         Self::read_buffered_from(reader, buffer, compression)
@@ -304,10 +305,10 @@ where
         };
 
         let header = get_record_header(&mut input)?;
-        let len = match header.content_length() {
+        let len = match header.content_length_lenient() {
             None => {
                 return Err(InvalidRecord::UnknownLength(
-                    header.field("Content-Length").map(|bytes| bytes.to_vec()),
+                    header.get_field_bytes("Content-Length").map(|bytes| bytes.to_vec()),
                 ));
             }
             Some(n) => n,

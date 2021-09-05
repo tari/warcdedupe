@@ -1,5 +1,6 @@
-use crate::header::{get_record_header, Field, Header, Version};
+use crate::header::{Field, get_record_header, Header};
 use crate::HeaderParseError;
+use crate::version::Version;
 
 #[test]
 fn can_read_record_header() {

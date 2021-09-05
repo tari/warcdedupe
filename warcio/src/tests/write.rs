@@ -1,6 +1,8 @@
-use crate::header::{FieldName, Header, Version};
-use crate::record::{Compression, Record};
 use std::io::{Cursor, Read, Write};
+
+use crate::header::{FieldName, Header};
+use crate::record::{Compression, Record};
+use crate::version::Version;
 
 #[test]
 fn writes_well_formed_warc1_1() {
