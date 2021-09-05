@@ -210,7 +210,7 @@ impl FieldName {
     ///
     /// This is useful for handling the difference in grammar between WARC 1.1 and earlier versions:
     /// while earlier versions define a URI as `"<" <'URI' per RFC3986> ">"` (surrounded by angle
-    /// brackets), WARC 1.1 removes the angle brackets from the grammar describing a URI, and
+    /// brackets), WARC 1.1 removes the angle brackets from the grammar describing a URI and
     /// explicitly adds the angle brackets to some (but not all) fields.
     /// This function will return `true` for those fields that do not have angle brackets in a
     /// WARC 1.1 record but do in earlier versions, and `false` for all other fields.
@@ -305,6 +305,37 @@ include!(concat!(env!("OUT_DIR"), "/header_record_types.rs"));
 type FieldMap = IndexMap<FieldName, Vec<u8>>;
 
 /// The header of a WARC record.
+///
+/// Field values can be accessed using the [`get_field`](Self::get_field) family of functions, or
+/// accessed in parsed form through specific methods such as
+/// [`content_length`](Self::content_length). Field values can be modified using the
+/// [`set_field`](Self::set_field) method, or fields can be removed entirely with [`remove_field`](
+/// Self::remove_field).
+///
+/// ```
+/// # use warcio::{Header, Version, FieldName};
+/// // Parse a header from bytes
+/// let raw_header = b"\
+/// WARC/1.1\r
+/// WARC-Record-ID: <urn:uuid:b4beb26f-54c4-4277-8e23-51aa9fc4476d>\r
+/// WARC-Date: 2021-08-05T06:22Z\r
+/// WARC-Type: resource\r
+/// Content-Length: 0\r
+/// \r
+/// ";
+/// let parsed_header = Header::parse(raw_header).unwrap();
+///
+/// // Construct a header from nothing
+/// let mut synthetic_header = Header::new(Version::WARC1_1);
+/// synthetic_header.set_field(FieldName::RecordId,
+///                            "<urn:uuid:b4beb26f-54c4-4277-8e23-51aa9fc4476d>");
+/// synthetic_header.set_field(FieldName::Date, "2021-08-05T06:22Z");
+/// synthetic_header.set_field(FieldName::Type, "resource");
+/// synthetic_header.set_field(FieldName::ContentLength, "0");
+///
+/// // Headers compare equal because they have the same version and fields
+/// assert_eq!(parsed_header, synthetic_header);
+/// ```
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Header {
     version: Version,
@@ -347,6 +378,7 @@ impl Header {
     /// not pad the output if dropped before `Content-Length` bytes have been written. Failing
     /// to write enough data will usually result in data corruption, but an error will also
     /// be emitted to the log.
+    // TODO make the concrete type public so it can into_inner() and the like.
     pub fn write_to<W: std::io::Write>(
         &self,
         dest: W,
@@ -415,8 +447,8 @@ impl Header {
     /// version 1.1.
     ///
     /// For example, a `WARC-Record-ID` field in WARC 1.0 might have the raw value
-    /// "<urn:uuid:ea07dfdd-9452-4b7d-add0-b2c538af5fa5>" but the same value in WARC 1.1 has the
-    /// value "urn:uuid:ea07dfdd-9452-4b7d-add0-b2c538af5fa5" (without angle brackets). This
+    /// `<urn:uuid:ea07dfdd-9452-4b7d-add0-b2c538af5fa5>` but the same value in WARC 1.1 has the
+    /// value `urn:uuid:ea07dfdd-9452-4b7d-add0-b2c538af5fa5` (without angle brackets). This
     /// function would return the value without brackets for all record versions.
     pub fn get_field_bytes<F: Into<FieldName>>(&self, field: F) -> Option<&[u8]> {
         let field: FieldName = field.into();
@@ -588,7 +620,7 @@ impl Header {
 /// This type is a convenience for parsing; actual header fields are stored in
 /// a map inside the record header.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Field {
+pub(crate) struct Field {
     name: FieldName,
     value: Vec<u8>,
 }
@@ -663,7 +695,8 @@ fn find_crlf2(buf: &[u8]) -> Option<usize> {
 /// Consumes the bytes that are parsed, leaving the reader at the beginning
 /// of the record payload. In case of an error in parsing, some or all of the
 /// input may be consumed.
-pub fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, HeaderParseError> {
+// TODO put this on a RecordReader type or something
+pub(crate) fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, HeaderParseError> {
     // Read bytes out of the input reader until we find the end of the header
     // (two CRLFs in a row).
     // First-chance: without copying anything

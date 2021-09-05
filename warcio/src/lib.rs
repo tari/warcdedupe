@@ -1,36 +1,61 @@
-//! Grammar per ISO-28500:2016 (WARC 1.1):
+//! Tools for reading, writing, and working with WARC (Web ARChive) files.
+//!
+//! ## Background
+//!
+//! WARC files are used to store digital resources and related information, generally for archival
+//! storage. They are most commonly used to store the results of web crawls, wherein a crawler
+//! requests resources from any desired web server(s) while storing the request that was sent for
+//! each resource, the corresponding response, metadata for each and optionally other related
+//! information. WARC files are widely used by organizations involved in web archiving, such as the
+//! [Internet Archive](https://archive.org) and the [Library of
+//! Congress](https://www.loc.gov/preservation/digital/formats/fdd/fdd000236.shtml).
+//!
+//! The WARC file format is formalized in an international standard, ISO 28500, which to date has
+//! two published versions: ISO 28500:2009 (WARC 1.0) and ISO 28500:2017 (WARC 1.1). The standard
+//! was largely developed through the [International Internet Preservation
+//! Consortium](https://netpreserve.org/) (IIPC); public discussion of further development and
+//! freely-available specifications are made available through the IIPC: see
+//! <https://iipc.github.io/warc-specifications/>.
+//!
+//! ## WARC structure
+//!
+//! A WARC file is a simple concatenation of records. Each record has a format similar to an HTTP
+//! message, consisting of a version declaration, a number of header fields, and any number of bytes
+//! of data. A simple record representing an HTTP request might look like this:
 //!
 //! ```text
-//! warc-file   = 1*warc-record
-//! warc-record = header CRLF
-//!               block CRLF CRLF
-//! header      = version warc-fields
-//! version     = "WARC/1.1" CRLF
-//! warc-fields = *named-field CRLF
-//! block       = *OCTET
+//! WARC/1.1
+//! WARC-Type: request
+//! WARC-Target-URI: https://example.com
+//! Content-Type: application/http;msgtype=request
+//! WARC-Record-ID: <urn:uuid:e061d11b-fb0a-4314-88c5-54e4870be701>
+//! WARC-Date: 2021-08-24T23:19:14Z
+//! Content-Length: 135
 //!
-//! named-field = field-name ":" [ field-value ]
-//! field-name  = token
-//! field-value = *( field-content | LWS )
-//! field-content = ...
-//! OCTET = <any bytes>
-//! token = 1*<any ASCII, except CTLs or separators>
-//! separators = [()<>@,;:\\"/[\]?={} \t]
-//! TEXT = <any except CTL>
-//! CHAR = <UTF-8 characters>
-//! DIGIT = [0-9]
-//! CTL = [\x00-\x1F]|\x7F
-//! CR = \r
-//! LF = \n
-//! SP = " "
-//! HT = \t
-//! CRLF = CR LF
-//! LWS [CRLF] 1*( SP | HT )
-//! quoted-string = ( <"> * (dqtext | quoted-pair ) <"> )
-//! qdtext = <any TEXT except <">>
-//! quoted-pair = "\" CHAR
-//! uri = <'URI' per RFC3986>
+//! GET /image/png HTTP/1.1
+//! User-Agent: Wget/1.21.1
+//! Accept: */*
+//! Accept-Encoding: identity
+//! Host: httpbin.org
+//! Connection: Keep-Alive
+//!
+//!
+//!
 //! ```
+//!
+//! Collectively the portion of the record before `GET` in this example is the record header,
+//! and the remainder is the record block with the exception of two newlines (each of them `\r\n`)
+//! at the end of the record. The first line of the header is the version line (allowing the
+//! record to be easily identified as a WARC record and indicating what format version it conforms
+//! to), and the remainder of the header is a series of fields each of which has a name and a value.
+//!
+//! ## Library structure
+//!
+//! In this library, the [`Header`] type contains the record version and fields. To write a record,
+//! a header can be constructed and its [`write_to`](Header::write_to) method will yield a write
+//! adapter to which the record block can be written. [`Record::read_from`] will do the opposite
+//! operation, reading the header of a record from a read adapter and returning an adapter allowing
+//! read access to the record block.
 
 #[cfg(feature = "chrono")]
 extern crate chrono;
@@ -41,13 +66,14 @@ extern crate log;
 
 use thiserror::Error;
 
-pub mod header;
+mod header;
 pub mod record;
 #[cfg(test)]
 mod tests;
 mod version;
 
 pub use header::{RecordType, FieldName, Header};
+pub use record::{Record, Compression};
 pub use version::Version;
 
 /// Reasons it may be impossible to parse a WARC header.

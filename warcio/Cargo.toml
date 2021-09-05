@@ -28,11 +28,3 @@ uncased = "0.9.6"
 phf_codegen = "0.9.0"
 rust-ini = "0.17.0"
 uncased = "0.9.6"
-
-[dev-dependencies]
-criterion = "0.3.4"
-
-[[bench]]
-name = "parser"
-harness = false
-

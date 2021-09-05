@@ -4,7 +4,7 @@ use crate::digest::Digester;
 use crate::response_log::ResponseLog;
 use crate::Deduplicator;
 use std::io::{Cursor, Read};
-use warcio::header::Header;
+use warcio::Header;
 use warcio::record::{Compression, Record};
 
 const HTTP_RECORD: &str = "\

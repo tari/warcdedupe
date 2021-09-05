@@ -11,7 +11,7 @@ use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
 use std::marker::PhantomData;
 use thiserror::Error;
-use warcio::header::FieldName;
+use warcio::FieldName;
 
 pub mod digest;
 pub mod response_log;

@@ -124,16 +124,14 @@ where
 
 /// A streaming WARC record.
 ///
-/// The header of the record is accessible via the [`Self::header`] method, and its
-/// payload is accessible through the [`Read`] impl.
+/// The header of the record is accessible via the [`header`](Self::header) field, and its
+/// block is accessible through the [`Read`](#impl-Read) impl.
 ///
-/// When done reading the payload, call [`Self::finish`] to advance the underlying
-/// reader past this record. This also automatically happens when the record
-/// is dropped, but the [`Drop`] impl will panic on error so you should
-/// explicitly call [`Self::finish`] if you wish to handle I/O errors at that point.
-///
-/// The input stream is guaranteed to have been read to the end of the record, including to
-/// the end of the compressed stream if the input is gzipped, when the record is finished.
+/// When done reading the payload, users should **call [`finish`](Self::finish)** to advance the
+/// underlying reader past this record. Failing to do so may leave the underlying reader at a
+/// location prior to the record's end, causing further reads from it to return unexpected data.
+/// Even if the record block is read in its entirety, the entire record is only guaranteed to have
+/// been read from the underlying input stream after `finish` is called.
 #[derive(Debug)]
 pub struct Record<R>
 where
@@ -273,6 +271,9 @@ where
     R: BufRead,
 {
     /// Read a record from an input stream.
+    ///
+    /// This function will parse the header of a record (loading it into memory), and the returned
+    /// instance allows streaming access to the record block.
     ///
     /// This allocates a new buffer on every invocation, which can be costly.
     /// If reading many records, prefer to use [`Self::read_buffered_from`] to reuse a

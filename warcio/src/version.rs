@@ -4,9 +4,8 @@ use crate::HeaderParseError;
 
 /// The version of a WARC record.
 ///
-/// Versions 0.9, 1.0 and 1.1 are all well-known, corresponding to the IIPC draft
-/// WARC specification, ISO 28500 and ISO 28500:2016, respectively. Those well-known
-/// versions can be conveniently referred to with associated constants like
+/// Versions 1.0 and 1.1 are well-known, corresponding to, ISO 28500:2009 and ISO 28500:2016,
+/// respectively. Well-known versions can be conveniently referred to with associated constants like
 /// [`WARC1_0`](Self::WARC1_0) and [`WARC1_1`](Self::WARC1_1).
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct Version {
@@ -48,7 +47,9 @@ impl Version {
         }
 
         if !bytes.starts_with(b"WARC/") {
-            return Err(HeaderParseError::invalid_signature(&bytes[..5]));
+            return Err(HeaderParseError::invalid_signature(
+                &bytes[..std::cmp::min(bytes.len(), 5)],
+            ));
         }
         let major_start = 5;
         let major_end = match bytes[major_start..].iter().position(|&x| x == b'.') {
