@@ -769,7 +769,6 @@ dependencies = [
  "indexmap",
  "lazy_static",
  "log",
- "memchr",
  "phf",
  "phf_codegen",
  "regex",

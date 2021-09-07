@@ -67,13 +67,13 @@ fn extra_buffering_works() {
         }
     }
 
-    let mut reader = DoubleBuffer::Start(
-        b"WARC/1.0\r\n\
-                                           X-First-Header: yes\r\n\
-                                           X-Second-Header:yes\r\n\
-                                           \r",
+    let mut reader = DoubleBuffer::Start(b"\
+        WARC/1.0\r\n\
+        X-First-Header: yes\r\n\
+        X-Second-Header:yes\r\n\
+        \r",
         // Header termination spans two buffers
-        // to catch potential errors there.
+        // to catch potential errors in splitting.
         b"\nIGNORED_DATA",
     );
     get_record_header(&mut reader).expect("failed to parse valid header");
@@ -88,13 +88,13 @@ fn incorrect_signature_is_invalid() {
     );
     assert_eq!(
         Version::parse(b"WARC/1.0a\r\n"),
-        Err(HeaderParseError::InvalidSignature("0a".into()))
+        Err(HeaderParseError::InvalidSignature("WARC/1.0a\r".into()))
     );
 }
 
 #[test]
 fn truncated_header_is_invalid() {
-    const BYTES: &[u8] = b"WARC/1.1\r\n
+    const BYTES: &[u8] = b"WARC/1.1\r\n\
                            Warc-Type: testdata\r\n\r";
 
     assert_eq!(get_record_header(BYTES), Err(HeaderParseError::Truncated),);

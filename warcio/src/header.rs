@@ -323,7 +323,8 @@ type FieldMap = IndexMap<FieldName, Vec<u8>>;
 /// Content-Length: 0\r
 /// \r
 /// ";
-/// let parsed_header = Header::parse(raw_header).unwrap();
+/// let (parsed_header, parsed_size) = Header::parse(raw_header).unwrap();
+/// assert_eq!(parsed_size, raw_header.len());
 ///
 /// // Construct a header from nothing
 /// let mut synthetic_header = Header::new(Version::WARC1_1);
@@ -351,20 +352,28 @@ impl Header {
     }
 
     /// Parse a header from bytes, returning the header and the number of bytes consumed.
-    pub fn parse(mut bytes: &[u8]) -> Result<Header, HeaderParseError> {
-        // version, fields, CRLF
+    pub fn parse(mut bytes: &[u8]) -> Result<(Header, usize), HeaderParseError> {
         let (mut bytes_consumed, version) = Version::parse(bytes)?;
         bytes = &bytes[bytes_consumed..];
 
         let mut fields: FieldMap = Default::default();
-        while &bytes[..2] != b"\r\n" {
+        while !bytes.starts_with(b"\r\n") {
+            // There might be a full CRLF but we haven't been given enough data to tell.
+            // It's definitely not a valid field right now, because fields never
+            // start with whitespace.
+            if bytes.is_empty() || bytes == b"\r" {
+                return Err(HeaderParseError::Truncated);
+            }
+
             let (n, field) = Field::parse(bytes)?;
             bytes_consumed += n;
             bytes = &bytes[n..];
             fields.insert(field.name, field.value);
         }
 
-        Ok(Header { version, fields })
+        // CRLF following the last field
+        bytes_consumed += 2;
+        Ok((Header { version, fields }, bytes_consumed))
     }
 
     /// Write the current record to the given output stream.
@@ -646,6 +655,8 @@ impl Field {
                 Regex::new(r"^[ \t]+(.*?)\r\n").expect("Continuation regex invalid");
         }
 
+        // TODO this is currently assuming a complete field is present; must handle
+        // a valid but truncated field by returning Truncated.
         let m = match RE.captures(bytes) {
             None => {
                 debug!("Header regex did not match");
@@ -674,22 +685,6 @@ impl Field {
     }
 }
 
-/// Return the index of the first position in the given buffer following
-/// a b"\r\n\r\n" sequence.
-#[inline]
-fn find_crlf2(buf: &[u8]) -> Option<usize> {
-    // TODO a naive implementation comparing windows() over buf actually seems slightly faster
-    // than an optimized searcher. Seems like headers are short enough and Finder overhead large
-    // enough that a simple (possibly autovectorized?) implementation is better. Should examine the
-    // generated code.
-    use memchr::memmem::Finder;
-    lazy_static! {
-        static ref SEARCHER: Finder<'static> = Finder::new(b"\r\n\r\n");
-    }
-
-    SEARCHER.find(buf).map(|i| i + 4)
-}
-
 /// Parse a WARC record header out of the provided `BufRead`.
 ///
 /// Consumes the bytes that are parsed, leaving the reader at the beginning
@@ -697,62 +692,67 @@ fn find_crlf2(buf: &[u8]) -> Option<usize> {
 /// input may be consumed.
 // TODO put this on a RecordReader type or something
 pub(crate) fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, HeaderParseError> {
-    // Read bytes out of the input reader until we find the end of the header
-    // (two CRLFs in a row).
-    // First-chance: without copying anything
-    let header: Option<(usize, Header)> = {
+    enum FirstChanceOutcome {
+        Success(usize, Header),
+        KeepLooking(Vec<u8>),
+    }
+
+    // First-chance: without copying anything, operating only from the input's buffer
+    let outcome = {
         let buf = reader.fill_buf()?;
         if buf.is_empty() {
             return Err(HeaderParseError::Truncated);
         }
-        if let Some(i) = find_crlf2(buf) {
-            // Weird split of parse and consume here is necessary because buf
-            // is borrowed from the reader so we can't consume until we no
-            // longer hold a reference to the buffer.
-            Some((i, Header::parse(&buf[..i])?))
-        } else {
-            None
+        // Weird split of parse and consume here is necessary because buf
+        // is borrowed from the reader so we can't consume until we no
+        // longer hold a reference to the buffer.
+        match Header::parse(buf) {
+            Ok((parsed, n)) => FirstChanceOutcome::Success(n, parsed),
+            Err(HeaderParseError::Truncated) => {
+                // Copy the input we've already searched into a buffer to continue past it
+                let owned_buf: Vec<u8> = buf.into();
+                reader.consume(owned_buf.len());
+                FirstChanceOutcome::KeepLooking(owned_buf)
+            }
+            Err(e) => return Err(e.into())
         }
     };
-    if let Some((sz, header)) = header {
-        trace!("Found complete header in buffer, {} bytes", sz);
-        reader.consume(sz);
-        return Ok(header);
-    }
+
+    let mut owned_buf = match outcome {
+        FirstChanceOutcome::Success(sz, header) => {
+            trace!("Found complete header in buffer, {} bytes", sz);
+            reader.consume(sz);
+            return Ok(header);
+        },
+        FirstChanceOutcome::KeepLooking(buf) => buf,
+    };
+    trace!("First-chance read unsuccessful yielding {} bytes", owned_buf.len());
 
     // Second chance: need to start copying out of the reader's buffer. Throughout this loop,
     // we've grabbed some number of bytes and own them with a tail copied out of the reader's
     // buffer but still buffered so we can give bytes back at the end.
-    let mut buf: Vec<u8> = Vec::new();
-    let mut bytes_consumed = 0;
     loop {
-        // Copy out of the reader
-        buf.extend(reader.fill_buf()?);
-        if buf.len() == bytes_consumed {
+        // Tracks the number of bytes we've read that definitely aren't a complete header
+        let bytes_consumed = owned_buf.len();
+        // Grab some data out of the reader and copy into the owned buffer
+        owned_buf.extend(reader.fill_buf()?);
+        if owned_buf.len() == bytes_consumed {
             // Read returned 0 bytes
             return Err(HeaderParseError::Truncated);
         }
 
-        // Only search new data; start from the earliest possible location
-        // a crlf2 could appear if it spans the boundary between buffers.
-        let start_search = if bytes_consumed > 3 {
-            bytes_consumed - 3
-        } else {
-            0
-        };
-        if let Some(i) = find_crlf2(&buf[start_search..]) {
-            // If we hit, consume up to the hit and done.
-            // Our buffer is larger than the reader's: be careful only to
-            // consume what the reader gave us most recently, which we haven't
-            // taken ownership of yet.
-            let match_idx = start_search + i;
-            reader.consume(match_idx - bytes_consumed);
-            return Header::parse(&buf[..match_idx]);
+        // Try to parse what we have buffered
+        match Header::parse(&owned_buf) {
+            Ok((parsed, n)) => {
+                reader.consume(n - bytes_consumed);
+                return Ok(parsed);
+            }
+            Err(HeaderParseError::Truncated) => {},
+            Err(e) => return Err(e.into()),
         }
 
         // Otherwise keep looking
-        reader.consume(buf.len() - bytes_consumed);
-        bytes_consumed = buf.len();
+        reader.consume(owned_buf.len() - bytes_consumed);
         // TODO enforce maximum vec size? (to avoid unbounded memory use on malformed input)
     }
 }
