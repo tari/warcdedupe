@@ -10,9 +10,10 @@ use indexmap::map::IndexMap;
 use regex::bytes::Regex;
 use uncased::{AsUncased, UncasedStr};
 
-use crate::record::Compression;
-use crate::version::Version;
+use crate::compression::Compression;
 use crate::HeaderParseError;
+use crate::record::RecordWriter;
+use crate::version::Version;
 
 use super::{CTL, SEPARATORS};
 
@@ -392,53 +393,8 @@ impl Header {
         &self,
         dest: W,
         compression: Compression,
-    ) -> std::io::Result<impl std::io::Write> {
-        use flate2::write::GzEncoder;
-        use std::io::{Result as IoResult, Write};
-
-        enum Output<W: Write> {
-            Plain(W),
-            Gzip(GzEncoder<W>),
-        }
-        impl<W: Write> Write for Output<W> {
-            fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-                match self {
-                    Output::Plain(w) => w.write(buf),
-                    Output::Gzip(w) => w.write(buf),
-                }
-            }
-
-            fn flush(&mut self) -> IoResult<()> {
-                match self {
-                    Output::Plain(w) => w.flush(),
-                    Output::Gzip(w) => w.flush(),
-                }
-            }
-        }
-
-        let mut dest = match compression {
-            Compression::None => Output::Plain(dest),
-            Compression::Gzip => Output::Gzip(GzEncoder::new(dest, flate2::Compression::best())),
-        };
-
-        // record header: version followed by fields
-        write!(
-            dest,
-            "WARC/{}.{}\r\n",
-            self.version.major, self.version.minor
-        )?;
-        for (key, value) in self.fields.iter() {
-            write!(&mut dest, "{}: ", <FieldName as AsRef<str>>::as_ref(key))?;
-            dest.write_all(value)?;
-            write!(&mut dest, "\r\n")?;
-        }
-        write!(&mut dest, "\r\n")?;
-
-        // record body: Content-Length octets of arbitrary data
-        Ok(crate::record::RecordWriter::new(
-            dest,
-            self.content_length(),
-        ))
+    ) -> std::io::Result<RecordWriter<W>> {
+        RecordWriter::new(dest, self, compression)
     }
 
     /// Get the value of a header field as bytes, or None if no such header exists.
@@ -522,6 +478,20 @@ impl Header {
 
     pub fn remove_field<N: Borrow<FieldName>>(&mut self, name: N) -> Option<Vec<u8>> {
         self.fields.shift_remove(name.borrow())
+    }
+
+    /// Get an iterator over the fields
+    pub fn iter_field_bytes(&self) -> impl Iterator<Item=(&FieldName, &[u8])> {
+        self.fields.iter().map(|(k, v)| (k, v.as_slice()))
+    }
+
+    pub fn iter_field_bytes_mut(&mut self) -> impl Iterator<Item=(&FieldName, &mut Vec<u8>)> {
+        self.fields.iter_mut()
+    }
+
+    /// Get the WARC version of this record.
+    pub fn version(&self) -> &Version {
+        &self.version
     }
 
     pub fn set_version<V: Into<Version>>(&mut self, version: V) {
@@ -714,7 +684,7 @@ pub(crate) fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Hea
                 reader.consume(owned_buf.len());
                 FirstChanceOutcome::KeepLooking(owned_buf)
             }
-            Err(e) => return Err(e.into())
+            Err(e) => return Err(e)
         }
     };
 
@@ -748,7 +718,7 @@ pub(crate) fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Hea
                 return Ok(parsed);
             }
             Err(HeaderParseError::Truncated) => {},
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         }
 
         // Otherwise keep looking

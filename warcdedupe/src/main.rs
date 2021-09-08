@@ -8,7 +8,7 @@ use std::io::{BufReader, BufWriter, Cursor, Write};
 use std::path::PathBuf;
 
 use docopt::Docopt;
-use warcio::record::Compression;
+use warcio::compression::Compression;
 
 use warcdedupe::digest::LengthSha1Digester;
 use warcdedupe::response_log::InMemoryResponseLog;

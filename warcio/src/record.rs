@@ -1,17 +1,20 @@
 //! Operations on complete WARC records.
-use super::HeaderParseError;
-use crate::header::get_record_header;
-use buf_redux::BufReader;
 use std::cmp;
 use std::error::Error as StdError;
 use std::fmt;
-use std::io::prelude::*;
 use std::io::Error as IoError;
+use std::io::prelude::*;
 use std::ops::Drop;
-use std::path::Path;
 
 pub use buf_redux::Buffer;
+use buf_redux::BufReader;
 use thiserror::Error;
+
+use crate::compression::{self, Compression};
+use crate::{Header, FieldName};
+use crate::header::get_record_header;
+
+use super::HeaderParseError;
 
 /// The number of bytes to skip per read() call when closing a record.
 ///
@@ -45,23 +48,6 @@ impl From<HeaderParseError> for InvalidRecord {
             HeaderParseError::IoError(e) => InvalidRecord::IoError(e),
             HeaderParseError::Truncated => InvalidRecord::EndOfStream,
             e => InvalidRecord::InvalidHeader(e),
-        }
-    }
-}
-
-/// The supported methods of compressing a single [`Record`].
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Compression {
-    None,
-    Gzip,
-    // TODO zstd mode https://iipc.github.io/warc-specifications/specifications/warc-zstd/
-}
-
-impl Compression {
-    pub fn guess_for_filename<P: AsRef<Path>>(path: P) -> Compression {
-        match path.as_ref().extension() {
-            Some(ext) if ext == "gz" => Compression::Gzip,
-            _ => Compression::None,
         }
     }
 }
@@ -406,21 +392,33 @@ where
     }
 }
 
-pub(crate) struct RecordWriter<W> {
+pub struct RecordWriter<W: Write> {
     limit: u64,
     written: u64,
-    writer: W,
+    writer: compression::Writer<W>,
     finished: bool,
 }
 
-impl<W> RecordWriter<W> {
-    pub fn new(writer: W, content_length: u64) -> Self {
-        RecordWriter {
-            limit: content_length,
-            written: 0,
-            writer,
-            finished: false,
+impl<W: Write> RecordWriter<W> {
+    pub fn new(dest: W, header: &Header, compression: Compression) -> std::io::Result<Self> {
+        let mut dest = compression::Writer::new(dest, compression);
+
+        // record header: version followed by fields
+        write!(&mut dest, "WARC/{}\r\n", header.version())?;
+        for (key, value) in header.iter_field_bytes() {
+            write!(&mut dest, "{}: ", <FieldName as AsRef<str>>::as_ref(key))?;
+            dest.write_all(value)?;
+            write!(&mut dest, "\r\n")?;
         }
+        write!(&mut dest, "\r\n")?;
+
+        // record body: Content-Length octets of arbitrary data
+        Ok(RecordWriter {
+            limit: header.content_length(),
+            writer: dest,
+            written: 0,
+            finished: false,
+        })
     }
 }
 
@@ -445,7 +443,7 @@ impl<W: Write> Write for RecordWriter<W> {
     }
 }
 
-impl<W> Drop for RecordWriter<W> {
+impl<W: Write> Drop for RecordWriter<W> {
     fn drop(&mut self) {
         if self.written < self.limit {
             error!(

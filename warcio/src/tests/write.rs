@@ -1,7 +1,8 @@
 use std::io::{Cursor, Read, Write};
 
+use crate::compression::Compression;
 use crate::header::{FieldName, Header};
-use crate::record::{Compression, Record};
+use crate::record::Record;
 use crate::version::Version;
 
 #[test]

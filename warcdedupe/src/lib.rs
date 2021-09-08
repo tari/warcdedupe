@@ -2,16 +2,18 @@
 extern crate log;
 
 use std::io::{BufRead, Seek, Write};
+use std::marker::PhantomData;
 
-use response_log::ResponseLog;
-use warcio::record::{Buffer, Compression, FinishError, InvalidRecord, Record};
-
-use crate::digest::Digester;
 use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
-use std::marker::PhantomData;
 use thiserror::Error;
+
+use response_log::ResponseLog;
+use warcio::compression::Compression;
 use warcio::FieldName;
+use warcio::record::{Buffer, FinishError, InvalidRecord, Record};
+
+use crate::digest::Digester;
 
 pub mod digest;
 pub mod response_log;

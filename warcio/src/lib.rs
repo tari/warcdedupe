@@ -66,15 +66,17 @@ extern crate log;
 
 use thiserror::Error;
 
+pub use compression::Compression;
+pub use header::{FieldName, Header, RecordType};
+pub use record::Record;
+pub use version::Version;
+
 mod header;
 pub mod record;
 #[cfg(test)]
 mod tests;
 mod version;
-
-pub use header::{RecordType, FieldName, Header};
-pub use record::{Record, Compression};
-pub use version::Version;
+pub mod compression;
 
 /// Reasons it may be impossible to parse a WARC header.
 #[derive(Debug, Error)]

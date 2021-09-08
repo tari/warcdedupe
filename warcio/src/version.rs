@@ -2,6 +2,7 @@ use std::str::{self, FromStr};
 
 use crate::HeaderParseError;
 use std::ops::Range;
+use std::fmt::Formatter;
 
 /// The version of a WARC record.
 ///
@@ -107,5 +108,17 @@ impl Version {
 impl From<(u32, u32)> for Version {
     fn from((major, minor): (u32, u32)) -> Self {
         Version { major, minor }
+    }
+}
+
+/// Display the version as a dotted pair (major.minor)
+///
+/// ```
+/// # use warcio::Version;
+/// assert_eq!("1.1", &format!("{}", Version::WARC1_1));
+/// ```
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
     }
 }
