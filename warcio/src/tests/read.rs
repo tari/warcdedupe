@@ -103,12 +103,12 @@ fn truncated_header_is_invalid() {
 #[test]
 fn invalid_fields_are_invalid() {
     assert_eq!(
-        Field::parse(b"This is not a valid field"),
+        Header::parse_field(b"This is not a valid field"),
         Err(HeaderParseError::MalformedField)
     );
 
     assert_eq!(
-        Field::parse(b"X-Invalid-UTF-8\xFF: yes"),
+        Header::parse_field(b"X-Invalid-UTF-8\xFF: yes"),
         Err(HeaderParseError::MalformedField)
     );
 }

@@ -2,17 +2,17 @@
 use std::cmp;
 use std::error::Error as StdError;
 use std::fmt;
-use std::io::Error as IoError;
 use std::io::prelude::*;
+use std::io::Error as IoError;
 use std::ops::Drop;
 
-pub use buf_redux::Buffer;
 use buf_redux::BufReader;
+pub use buf_redux::Buffer;
 use thiserror::Error;
 
 use crate::compression::{self, Compression};
-use crate::{Header, FieldName};
 use crate::header::get_record_header;
+use crate::{FieldName, Header};
 
 use super::HeaderParseError;
 
@@ -295,7 +295,9 @@ where
         let len = match header.content_length_lenient() {
             None => {
                 return Err(InvalidRecord::UnknownLength(
-                    header.get_field_bytes("Content-Length").map(|bytes| bytes.to_vec()),
+                    header
+                        .get_field_bytes("Content-Length")
+                        .map(|bytes| bytes.to_vec()),
                 ));
             }
             Some(n) => n,

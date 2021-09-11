@@ -60,8 +60,6 @@
 #[cfg(feature = "chrono")]
 extern crate chrono;
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate log;
 
 use thiserror::Error;
@@ -71,12 +69,12 @@ pub use header::{FieldName, Header, RecordType};
 pub use record::Record;
 pub use version::Version;
 
+pub mod compression;
 mod header;
 pub mod record;
 #[cfg(test)]
 mod tests;
 mod version;
-pub mod compression;
 
 /// Reasons it may be impossible to parse a WARC header.
 #[derive(Debug, Error)]
@@ -117,13 +115,10 @@ impl HeaderParseError {
 }
 
 /// WARC EBNF "separators" class
-const SEPARATORS: &[char] = &[
-    '(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=', '{', '}', ' ', '\t',
-];
+const SEPARATORS: &[u8] = b"()<>@,;:\\\"/[]?={} \t";
 
 /// WARC EBNF "CTL" class: ASCII chars 0-31 and DEL (127)
-const CTL: &[char] = &[
-    '\x00', '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07', '\x08', '\x09', '\x0a', '\x0b',
-    '\x0c', '\x0d', '\x0e', '\x0f', '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
-    '\x18', '\x19', '\x1a', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f', '\x7f',
+const CTL: &[u8] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+    0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1d, 0x1e, 0x1f, 0x7f,
 ];

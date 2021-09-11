@@ -7,7 +7,6 @@ use std::io::BufRead;
 use std::str;
 
 use indexmap::map::IndexMap;
-use regex::bytes::Regex;
 use uncased::{AsUncased, UncasedStr};
 
 use crate::compression::Compression;
@@ -431,27 +430,87 @@ impl Header {
 
     /// Parse a header from bytes, returning the header and the number of bytes consumed.
     pub fn parse(mut bytes: &[u8]) -> Result<(Header, usize), HeaderParseError> {
-        let (mut bytes_consumed, version) = Version::parse(bytes)?;
-        bytes = &bytes[bytes_consumed..];
+        let (version_consumed, version) = Version::parse(bytes)?;
+        bytes = &bytes[version_consumed..];
 
         let mut fields: FieldMap = Default::default();
-        while !bytes.starts_with(b"\r\n") {
-            // There might be a full CRLF but we haven't been given enough data to tell.
-            // It's definitely not a valid field right now, because fields never
-            // start with whitespace.
-            if bytes.is_empty() || bytes == b"\r" {
-                return Err(HeaderParseError::Truncated);
+        let mut headers_consumed = 0;
+        loop {
+            match bytes.get(..2) {
+                Some([b'\r', b'\n', ..]) => break,
+                Some(_) => { /* Not end of headers, so probably a field */ }
+                None => return Err(HeaderParseError::Truncated),
             }
 
-            let (n, field) = Field::parse(bytes)?;
-            bytes_consumed += n;
-            bytes = &bytes[n..];
-            fields.insert(field.name, field.value);
+            let (name, value, sz) = Self::parse_field(bytes)?;
+            let name =
+                str::from_utf8(name).expect("parse_field should only accept ASCII field names");
+            fields.insert(name.into(), value);
+            bytes = &bytes[sz..];
+            headers_consumed += sz;
         }
 
-        // CRLF following the last field
-        bytes_consumed += 2;
-        Ok((Header { version, fields }, bytes_consumed))
+        Ok((
+            Header { version, fields },
+            version_consumed + headers_consumed + 2,
+        ))
+    }
+
+    pub(crate) fn parse_field(bytes: &[u8]) -> Result<(&[u8], Vec<u8>, usize), HeaderParseError> {
+        if bytes.is_empty() {
+            return Err(HeaderParseError::Truncated);
+        }
+
+        // field-name: at least one token, which is an ASCII value excluding CTL or SEPARATORS
+        let name_end = match bytes
+            .iter()
+            .position(|b| !b.is_ascii() || CTL.contains(b) || SEPARATORS.contains(b))
+        {
+            Some(i) => i,
+            None => return Err(HeaderParseError::MalformedField),
+        };
+        // literal colon must follow field-name
+        match bytes.get(name_end) {
+            None => return Err(HeaderParseError::Truncated),
+            Some(b':') => { /* Correctly formed */ }
+            Some(_) => return Err(HeaderParseError::MalformedField),
+        }
+
+        let mut chunk_start = name_end + 1;
+        let mut value: Vec<u8> = vec![];
+        let consumed = loop {
+            // Trim leading whitespace
+            chunk_start += match bytes[chunk_start..]
+                .iter()
+                .position(|&x| x != b' ' && x != b'\t')
+            {
+                None => return Err(HeaderParseError::Truncated),
+                Some(idx) => idx,
+            };
+
+            // Take data until CRLF
+            let chunk_end = match bytes[chunk_start..].windows(2).position(|s| s == b"\r\n") {
+                Some(idx) => chunk_start + idx,
+                None => return Err(HeaderParseError::Truncated),
+            };
+            value.extend_from_slice(&bytes[chunk_start..chunk_end]);
+
+            // Stop if the following byte after CRLF isn't LWS, otherwise continue since it's a
+            // folded line.
+            match bytes.get(chunk_end + 2) {
+                // LWS follows: this is a folded line. Advance to it.
+                Some(b' ') | Some(b'\t') => {
+                    chunk_start = chunk_end + 2;
+                    continue;
+                }
+                // Non-LWS: end of this field
+                Some(_) => break chunk_end + 2,
+                // Absent: can't tell
+                None => return Err(HeaderParseError::Truncated),
+            }
+        };
+
+        Ok((&bytes[..name_end], value, consumed))
     }
 
     /// Write the current record to the given output stream.
@@ -539,7 +598,10 @@ impl Header {
         let name = name.into();
         let name_str: &str = name.as_ref();
         assert!(
-            !name_str.contains(SEPARATORS) && !name_str.contains(CTL),
+            name_str
+                .chars()
+                .any(|c| c.is_ascii()
+                    && !(SEPARATORS.contains(&(c as u8)) || CTL.contains(&(c as u8)))),
             "field name {:?} contains illegal characters",
             name
         );
@@ -679,57 +741,6 @@ impl Header {
 pub(crate) struct Field {
     name: FieldName,
     value: Vec<u8>,
-}
-
-impl Field {
-    /// Construct a field with the given name and value.
-    pub fn new<S: Into<FieldName>>(name: S, value: Vec<u8>) -> Field {
-        Field {
-            name: name.into(),
-            value,
-        }
-    }
-
-    /// Parse a Field from bytes.
-    ///
-    /// Returns the number of bytes consumed and the parsed field on succes.
-    pub fn parse(bytes: &[u8]) -> Result<(usize, Field), HeaderParseError> {
-        // TODO these may not correctly handle `quoted-string` values containing CRLF2
-        lazy_static! {
-            static ref RE: Regex =
-                Regex::new(r"^([a-zA-Z_\-]+): *(.*?)\r\n").expect("Field regex invalid");
-            static ref CONTINUATION: Regex =
-                Regex::new(r"^[ \t]+(.*?)\r\n").expect("Continuation regex invalid");
-        }
-
-        // TODO this is currently assuming a complete field is present; must handle
-        // a valid but truncated field by returning Truncated.
-        let m = match RE.captures(bytes) {
-            None => {
-                debug!("Header regex did not match");
-                return Err(HeaderParseError::MalformedField);
-            }
-            Some(c) => c,
-        };
-        let name = unsafe {
-            // RE only matches a subset of ASCII, so we're also guaranteed that
-            // the name is valid UTF-8 as long as there was a match.
-            debug_assert!(m[1].iter().all(u8::is_ascii));
-            str::from_utf8_unchecked(&m[1])
-        };
-        let mut bytes_taken = m[0].len();
-        let mut value: Vec<u8> = m[2].to_owned();
-
-        // Handle multiline values
-        while let Some(m) = CONTINUATION.captures(&bytes[bytes_taken..]) {
-            trace!("Multiline header detected, continuing with {:?}", m);
-            value.extend(&m[1]);
-            bytes_taken += m[0].len();
-        }
-
-        trace!("Got header {}: {:?}", name, value);
-        Ok((bytes_taken, Field::new(name, value)))
-    }
 }
 
 /// Parse a WARC record header out of the provided `BufRead`.

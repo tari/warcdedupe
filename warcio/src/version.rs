@@ -1,8 +1,8 @@
 use std::str::{self, FromStr};
 
 use crate::HeaderParseError;
-use std::ops::Range;
 use std::fmt::Formatter;
+use std::ops::Range;
 
 /// The version of a WARC record.
 ///
@@ -47,19 +47,27 @@ impl Version {
                 // Nothing here; it could be digits which would be valid
                 return Err(HeaderParseError::Truncated);
             }
-            match bytes[from..].iter().copied().take_while(u8::is_ascii_digit).enumerate().last() {
+            match bytes[from..]
+                .iter()
+                .copied()
+                .take_while(u8::is_ascii_digit)
+                .enumerate()
+                .last()
+            {
                 // Got at least one digit
                 Some((idx, _)) => Ok(from + idx + 1),
                 // Have something but the first character is not a digit; that's invalid
-                None => Err(HeaderParseError::invalid_signature(&bytes[..min(from + 8, bytes.len())]))
+                None => Err(HeaderParseError::invalid_signature(
+                    &bytes[..min(from + 8, bytes.len())],
+                )),
             }
         }
         fn bytes_to_u32(bytes: &[u8], range: Range<usize>) -> Result<u32, HeaderParseError> {
-            debug_assert!(&bytes[range.clone()].iter().all(u8::is_ascii_digit),
-                "Integer to parse should consist only of ASCII digits");
-            let s = unsafe {
-                str::from_utf8_unchecked(&bytes[range.clone()])
-            };
+            debug_assert!(
+                &bytes[range.clone()].iter().all(u8::is_ascii_digit),
+                "Integer to parse should consist only of ASCII digits"
+            );
+            let s = unsafe { str::from_utf8_unchecked(&bytes[range.clone()]) };
 
             match u32::from_str(s) {
                 Ok(x) => Ok(x),
@@ -81,7 +89,7 @@ impl Version {
         let major_end = grab_digits(bytes, major_start)?;
         // .. must be followed by decimal point
         match bytes.get(major_end) {
-            Some(b'.') => {/* Decimal point is where we expect it */},
+            Some(b'.') => { /* Decimal point is where we expect it */ }
             // Something else is invalid
             Some(_) => return Err(HeaderParseError::invalid_signature(&bytes[..major_end])),
             // No more data, could still be valid
@@ -95,8 +103,12 @@ impl Version {
         // .. must be followed by CRLF
         match bytes[minor_end..] {
             [] | [b'\r'] => return Err(HeaderParseError::Truncated),
-            [b'\r', b'\n', ..] => {/* got the desired CRLF */},
-            _ => return Err(HeaderParseError::invalid_signature(&bytes[..min(minor_end + 2, bytes.len())]))
+            [b'\r', b'\n', ..] => { /* got the desired CRLF */ }
+            _ => {
+                return Err(HeaderParseError::invalid_signature(
+                    &bytes[..min(minor_end + 2, bytes.len())],
+                ))
+            }
         }
         let minor = bytes_to_u32(&bytes, minor_start..minor_end)?;
 
