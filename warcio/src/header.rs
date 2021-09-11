@@ -10,9 +10,9 @@ use indexmap::map::IndexMap;
 use uncased::{AsUncased, UncasedStr};
 
 use crate::compression::Compression;
-use crate::HeaderParseError;
 use crate::record::RecordWriter;
 use crate::version::Version;
+use crate::HeaderParseError;
 
 use super::{CTL, SEPARATORS};
 
@@ -620,11 +620,11 @@ impl Header {
     }
 
     /// Get an iterator over the fields
-    pub fn iter_field_bytes(&self) -> impl Iterator<Item=(&FieldName, &[u8])> {
+    pub fn iter_field_bytes(&self) -> impl Iterator<Item = (&FieldName, &[u8])> {
         self.fields.iter().map(|(k, v)| (k, v.as_slice()))
     }
 
-    pub fn iter_field_bytes_mut(&mut self) -> impl Iterator<Item=(&FieldName, &mut Vec<u8>)> {
+    pub fn iter_field_bytes_mut(&mut self) -> impl Iterator<Item = (&FieldName, &mut Vec<u8>)> {
         self.fields.iter_mut()
     }
 
@@ -772,7 +772,7 @@ pub(crate) fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Hea
                 reader.consume(owned_buf.len());
                 FirstChanceOutcome::KeepLooking(owned_buf)
             }
-            Err(e) => return Err(e)
+            Err(e) => return Err(e),
         }
     };
 
@@ -781,10 +781,13 @@ pub(crate) fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Hea
             trace!("Found complete header in buffer, {} bytes", sz);
             reader.consume(sz);
             return Ok(header);
-        },
+        }
         FirstChanceOutcome::KeepLooking(buf) => buf,
     };
-    trace!("First-chance read unsuccessful yielding {} bytes", owned_buf.len());
+    trace!(
+        "First-chance read unsuccessful yielding {} bytes",
+        owned_buf.len()
+    );
 
     // Second chance: need to start copying out of the reader's buffer. Throughout this loop,
     // we've grabbed some number of bytes and own them with a tail copied out of the reader's
@@ -805,7 +808,7 @@ pub(crate) fn get_record_header<R: BufRead>(mut reader: R) -> Result<Header, Hea
                 reader.consume(n - bytes_consumed);
                 return Ok(parsed);
             }
-            Err(HeaderParseError::Truncated) => {},
+            Err(HeaderParseError::Truncated) => {}
             Err(e) => return Err(e),
         }
 

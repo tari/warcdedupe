@@ -1,4 +1,4 @@
-use crate::{Header, Version, FieldName};
+use crate::{FieldName, Header, Version};
 
 mod read;
 mod write;

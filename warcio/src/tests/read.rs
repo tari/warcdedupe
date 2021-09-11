@@ -1,6 +1,6 @@
-use crate::header::{Field, get_record_header, Header};
-use crate::HeaderParseError;
+use crate::header::{get_record_header, Field, Header};
 use crate::version::Version;
+use crate::HeaderParseError;
 
 #[test]
 fn can_read_record_header() {
@@ -67,7 +67,8 @@ fn extra_buffering_works() {
         }
     }
 
-    let mut reader = DoubleBuffer::Start(b"\
+    let mut reader = DoubleBuffer::Start(
+        b"\
         WARC/1.0\r\n\
         X-First-Header: yes\r\n\
         X-Second-Header:yes\r\n\

@@ -3,12 +3,12 @@ use std::io::{Cursor, Read};
 use pretty_assertions::assert_eq;
 
 use warcio::compression::Compression;
-use warcio::Header;
 use warcio::record::Record;
+use warcio::Header;
 
-use crate::Deduplicator;
 use crate::digest::Digester;
 use crate::response_log::ResponseLog;
+use crate::Deduplicator;
 
 const HTTP_RECORD: &str = "\
 WARC/1.0\r

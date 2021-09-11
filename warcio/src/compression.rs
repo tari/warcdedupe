@@ -66,11 +66,10 @@ impl<W: Write> Writer<W> {
     pub fn finish(self) -> IoResult<W> {
         match self {
             Self::Plain(w) => Ok(w),
-            Self::Gzip(gz) => gz.finish()
+            Self::Gzip(gz) => gz.finish(),
         }
     }
 }
-
 
 impl<W: Write> Write for Writer<W> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
@@ -87,4 +86,3 @@ impl<W: Write> Write for Writer<W> {
         }
     }
 }
-

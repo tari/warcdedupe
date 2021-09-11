@@ -2,8 +2,8 @@ use std::io::BufRead;
 
 use data_encoding::BASE32;
 use std::fmt::Debug;
-use warcio::Header;
 use warcio::record::Record;
+use warcio::Header;
 
 pub trait Digester: Sized {
     type Digest: Debug + Eq + Clone;

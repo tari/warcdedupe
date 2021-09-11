@@ -10,8 +10,8 @@ use thiserror::Error;
 
 use response_log::ResponseLog;
 use warcio::compression::Compression;
-use warcio::FieldName;
 use warcio::record::{Buffer, FinishError, InvalidRecord, Record};
+use warcio::FieldName;
 
 use crate::digest::Digester;
 
