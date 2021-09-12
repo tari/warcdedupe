@@ -1,4 +1,4 @@
-use crate::header::{get_record_header, Field, Header};
+use crate::header::{get_record_header, Header};
 use crate::version::Version;
 use crate::HeaderParseError;
 

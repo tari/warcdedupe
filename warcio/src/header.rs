@@ -552,15 +552,27 @@ impl Header {
     /// value `urn:uuid:ea07dfdd-9452-4b7d-add0-b2c538af5fa5` (without angle brackets). This
     /// function would return the value without brackets for all record versions.
     pub fn get_field_bytes<F: Into<FieldName>>(&self, field: F) -> Option<&[u8]> {
-        let field: FieldName = field.into();
+        let field = field.into();
+        if !field.value_is_bare_uri() {
+            return self.get_field_bytes_raw(field);
+        }
 
-        let mut value = self.fields.get(&field).map(Vec::as_slice)?;
-        if field.value_is_bare_uri() && self.version <= Version::WARC1_0 {
+        let mut value = self.get_field_bytes_raw(field)?;
+        if self.version <= Version::WARC1_0 {
+            // Strip angle brackets for pre-1.1 WARC versions
             if value.first() == Some(&b'<') && value.last() == Some(&b'>') {
                 value = &value[1..value.len() - 1];
             }
         }
         Some(value)
+    }
+
+    /// Get the value of a header field as bytes, without URL translation.
+    ///
+    /// This function works like [`get_field_bytes`], except bare URIs are not translated as
+    /// described in that function's documentation.
+    pub fn get_field_bytes_raw<F: Into<FieldName>>(&self, field: F) -> Option<&[u8]> {
+        self.fields.get(&field.into()).map(Vec::as_slice)
     }
 
     /// Get the value of a header field, or None if it does not exist or is not a valid Rust string.
@@ -619,11 +631,21 @@ impl Header {
         self.fields.shift_remove(name.borrow())
     }
 
-    /// Get an iterator over the fields
+    /// Get an iterator over the fields in this header.
+    ///
+    /// In comparison to [`get_field_bytes`], the values yielded by this iterator will have the
+    /// raw value to be read or written from a serialized record, including angle brackets
+    /// or not for values which are [bare URIs](FieldName::value_is_bare_uri) based on
+    /// the WARC version.
     pub fn iter_field_bytes(&self) -> impl Iterator<Item = (&FieldName, &[u8])> {
         self.fields.iter().map(|(k, v)| (k, v.as_slice()))
     }
 
+    /// Get an iterator over mutable field values.
+    ///
+    /// As with [`iter_field_bytes`], the yielded values are not transformed URIs if the field
+    /// is a bare URI like they would be if retrieved by [`get_field_bytes`] or modified with
+    /// [`set_field`].
     pub fn iter_field_bytes_mut(&mut self) -> impl Iterator<Item = (&FieldName, &mut Vec<u8>)> {
         self.fields.iter_mut()
     }
@@ -633,11 +655,42 @@ impl Header {
         &self.version
     }
 
+    /// Update the WARC version of this header.
+    ///
+    /// This will update any bare URIs to account for version differences as described for
+    /// [`set_field`], then set the version to the provided one.
     pub fn set_version<V: Into<Version>>(&mut self, version: V) {
-        // TODO fields need to know their type in order to convert between representations in some
-        // cases, particularly URLs for conversion to or from WARC 1.1. Handle this by making
-        // FieldName aware of value classes (such as URIs) so we can add or remove surrounding
-        // brackets from fields that have URI values on access.
+        let version = version.into();
+        let transform: Option<fn(&mut Vec<u8>)> = if self.version <= Version::WARC1_0 && version > Version::WARC1_0 {
+            // Upgrading: remove angle brackets if present. Malformed pre-1.1 records might
+            // not have brackets.
+            Some(|v| {
+                if v.starts_with(b"<") && v.ends_with(b">") {
+                    v.pop();
+                    v.remove(0);
+                }
+            })
+        } else if version < Version::WARC1_1 && self.version >= Version::WARC1_1 {
+            // Downgrading: add angle brackets if not present. Malformed post-1.1 records might
+            // already have brackets.
+            Some(|v| {
+                if !(v.starts_with(b"<") && v.ends_with(b">")) {
+                    v.insert(0, b'<');
+                    v.push(b'>');
+                }
+            })
+        } else {
+            None
+        };
+
+        if let Some(transform) = transform {
+            for (name, value) in self.iter_field_bytes_mut() {
+                if name.value_is_bare_uri() {
+                    transform(value);
+                }
+            }
+        }
+        self.version = version;
     }
 
     /// Get the [`WARC-Record-ID`](FieldName::RecordId) field value.
