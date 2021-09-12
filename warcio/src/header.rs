@@ -524,7 +524,6 @@ impl Header {
     /// not pad the output if dropped before `Content-Length` bytes have been written. Failing
     /// to write enough data will usually result in data corruption, but an error will also
     /// be emitted to the log.
-    // TODO make the concrete type public so it can into_inner() and the like.
     pub fn write_to<W: std::io::Write>(
         &self,
         dest: W,
