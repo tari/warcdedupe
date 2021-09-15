@@ -11,7 +11,7 @@ use thiserror::Error;
 use response_log::ResponseLog;
 use warcio::compression::Compression;
 use warcio::record::{Buffer, FinishError, InvalidRecord, Record};
-use warcio::FieldName;
+use warcio::FieldKind;
 
 use crate::digest::Digester;
 
@@ -55,7 +55,7 @@ where
 
         // A record ID is required by the spec to be present, and we need to refer
         // to an original record by ID. Noncompliant records will simply be copied.
-        let record_id = match record.header.get_field(FieldName::RecordId) {
+        let record_id = match record.header.get_field(FieldKind::RecordId) {
             Some(id) => id,
             None => {
                 warn!("Skipping record with no ID: impossible to WARC-Refers-To");
@@ -71,7 +71,7 @@ where
         // useful only for responses.
         // TODO: truncated records might have the same payload after truncation as another truncated
         // record but the truncated part might differ. Possibly ignore truncated records.
-        if record.header.get_field(FieldName::Type) != Some("response") {
+        if record.header.get_field(FieldKind::Type) != Some("response") {
             trace!(
                 "Skip non-response record {:?} of type {:?}",
                 record_id,
@@ -84,7 +84,7 @@ where
         // specified by WARC 1.1 6.3.2 and RFC 2616.
         let content_type: Option<mime::Mime> = record
             .header
-            .get_field(FieldName::ContentType)
+            .get_field(FieldKind::ContentType)
             .and_then(|s| s.parse().ok());
         let content_is_http_response = content_type.map_or(false, |t| {
             t.essence_str() == "application/http"
@@ -92,7 +92,7 @@ where
         });
         let uri_is_http = record
             .header
-            .get_field(FieldName::TargetURI)
+            .get_field(FieldKind::TargetURI)
             .map_or(false, |uri| {
                 uri.starts_with("http:") || uri.starts_with("https:")
             });
@@ -164,8 +164,8 @@ where
         let record_id = record.header.record_id();
         // It is recommended that revisit records refer to the original target URI and date,
         // but not mandatory.
-        let timestamp = record.header.get_field(FieldName::Date);
-        let target = record.header.get_field(FieldName::TargetURI);
+        let timestamp = record.header.get_field(FieldKind::Date);
+        let target = record.header.get_field(FieldKind::TargetURI);
         let (original_id, original_uri, original_date) =
             match self.log.add(record_id, target, timestamp, digest.clone()) {
                 None => return Ok(NeedsCopy),
@@ -202,7 +202,7 @@ where
         dedup_headers.set_field("Content-Length", format!("{}", prefix_data.len()));
         dedup_headers.set_field("WARC-Truncated", "length");
         // TODO we have the entire prefix data, so can compute the new digest rather than dropping
-        dedup_headers.remove_field(FieldName::BlockDigest);
+        dedup_headers.remove_field(FieldKind::BlockDigest.into_name());
 
         // TODO: this seems to be writing extra garbage after the prefix data
         let mut dedup_body = dedup_headers.write_to(&mut self.output, self.output_compression)?;

@@ -2,7 +2,7 @@ use std::env;
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ini::Ini;
 use uncased::UncasedStr;
@@ -21,29 +21,26 @@ fn main() {
         }
 
         let ini = Ini::load_from_file(&ini_path).unwrap();
-        generate_conversions(&ini, &base_path).expect(&format!(
-            "Failed to generate conversions from {:?}",
-            ini_path
-        ));
+
+        let out_path = base_path.to_owned().join(
+            ini.general_section()
+                .get("file")
+                .expect("file property missing from ini general section"),
+        );
+        let type_name = ini
+            .general_section()
+            .get("type")
+            .expect("type property missing from ini general section");
+
+        generate_conversions(
+            BufWriter::new(File::create(&out_path).expect("failed to create output file")),
+            type_name,
+            ini.section(Some("values")).expect("values section missing from ini").iter()
+        ).unwrap_or_else(|_| panic!("Failed to generate conversions from {:?}", ini_path));
     }
 }
 
-fn generate_conversions(ini: &Ini, base_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let out_path = base_path.to_owned().join(
-        ini.general_section()
-            .get("file")
-            .expect("file property missing from ini general section"),
-    );
-    let type_name = ini
-        .general_section()
-        .get("type")
-        .expect("type property missing from ini general section");
-    let catchall_variant = ini
-        .general_section()
-        .get("catchall")
-        .expect("catchall property missing from ini general section");
-
-    let mut out = BufWriter::new(File::create(&out_path).unwrap());
+fn generate_conversions<'a, W: Write, V: Iterator<Item=(&'a str, &'a str)>>(mut out: W, type_name: &str, variants: V) -> Result<(), Box<dyn std::error::Error>> {
     let mut map = phf_codegen::Map::<&'static UncasedStr>::new();
 
     writeln!(
@@ -55,11 +52,7 @@ fn generate_conversions(ini: &Ini, base_path: &Path) -> Result<(), Box<dyn std::
         t = type_name
     )?;
 
-    for (variant, repr) in ini
-        .section(Some("values"))
-        .expect("values section missing from ini")
-        .iter()
-    {
+    for (variant, repr) in variants {
         writeln!(&mut out, "            {} => \"{}\",", variant, repr)?;
 
         map.entry(
@@ -70,29 +63,30 @@ fn generate_conversions(ini: &Ini, base_path: &Path) -> Result<(), Box<dyn std::
 
     writeln!(
         &mut out,
-        "            {}(s) => s,
-        }}
+        "        }}
     }}
-}}\n",
-        catchall_variant
+}}\n"
     )?;
 
     writeln!(
         &mut out,
-        "impl<S: AsRef<str> + Into<String>> std::convert::From<S> for {t} {{
-    fn from(s: S) -> Self {{
-        use uncased::UncasedStr;
-        static MAP: phf::Map<&'static UncasedStr, {t}> = {m};
+        "impl std::convert::TryFrom<&str> for {t} {{
+    /// Conversion from string fails if the string is not a known kind.
+    type Error = ();
+
+    fn try_from(s: &str) -> Result<Self, ()> {{
+        use uncased::AsUncased;
+        static MAP: phf::Map<&'static ::uncased::UncasedStr, {t}> = {m};
 
         MAP
-            .get(UncasedStr::new(s.as_ref()))
+            .get(s.as_uncased())
+            // Just a copy since get() returns a ref
             .map(Clone::clone)
-            .unwrap_or_else(|| {t}::{catchall}(s.into().into_boxed_str()))
+            .ok_or(())
     }}
 }}\n",
         t = type_name,
-        catchall = catchall_variant,
-        m = map.build()
+        m = map.build(),
     )?;
     Ok(())
 }

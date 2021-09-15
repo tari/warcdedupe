@@ -16,33 +16,9 @@ use crate::HeaderParseError;
 
 use super::{CTL, SEPARATORS};
 
-/// The name of a WARC header field.
-///
-/// Field names are case-insensitive strings made up of one or more ASCII characters excluding
-/// control characters (values 0-31 and 127) and separators (`()<>@,;:\"/[]?={} \t`). A `FieldName`
-/// can be constructed from arbitrary input using the [`From<str>` impl](#impl-From<S>), or a
-/// variant may be directly constructed. A string representation of a parsed name can be obtained
-/// through [`AsRef<str>`](#impl-AsRef<str>).
-///
-/// Comparison, ordering, and hashing of field names is always case-insensitive, and the standard
-/// variants normalize their case to those used by the standard. Unrecognized values will preserve
-/// case when converted to strings but still compare case-insensitively.
-///
-/// ```
-/// # use warcio::FieldName;
-/// let id = FieldName::RecordId;
-/// // Conversion from string via From
-/// let parsed_id: FieldName = "warc-record-id".into();
-///
-/// assert_eq!(id, parsed_id);
-/// // Input was cased differently: standard name has been normalized
-/// assert_eq!("WARC-Record-ID", parsed_id.as_ref());
-/// // Only comparison of FieldNames is case-insensitive, a string is not
-/// assert_eq!(parsed_id, "wArC-ReCoRd-Id".into());
-/// assert_ne!(parsed_id.as_ref(), "wArC-ReCoRd-Id");
-/// ```
-#[derive(Debug, Clone)]
-pub enum FieldName {
+/// Standardized values for [field names](FieldName).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
     /// `WARC-Record-ID`: a globally unique identifier for a record.
     ///
     /// This field is mandatory and must be present in a standards-compliant record.
@@ -190,6 +166,54 @@ pub enum FieldName {
     /// This field is required for the last [continuation](RecordType::Continuation) record of a
     /// series, and *shall not* be used elsewhere.
     SegmentTotalLength,
+}
+
+impl From<&FieldKind> for FieldName {
+    fn from(kind: &FieldKind) -> FieldName {
+        kind.into_name()
+    }
+}
+
+impl FieldKind {
+    pub fn into_name(self) -> FieldName {
+        FieldName::Known(self)
+    }
+}
+
+include!(concat!(env!("OUT_DIR"), "/field_kind_conversions.rs"));
+
+/// The name of a WARC header field.
+///
+/// Field names are case-insensitive strings made up of one or more ASCII characters excluding
+/// control characters (values 0-31 and 127) and separators (`()<>@,;:\"/[]?={} \t`). A `FieldName`
+/// can be constructed from arbitrary input using the [`From<str>` impl](#impl-From<S>), or a
+/// variant may be directly constructed. A string representation of a parsed name can be obtained
+/// through [`AsRef<str>`](#impl-AsRef<str>).
+///
+/// Standardized values for field names are enumerated by the [`FieldKind`] type, for which
+/// conversions and most operations are conveniently implemented. A `FieldKind` can trivially
+/// be converted to or compared with a `FieldName`.
+///
+/// Comparison, ordering, and hashing of field names is always case-insensitive, and the standard
+/// variants normalize their case to those used by the standard. Unrecognized values will preserve
+/// case when converted to strings but still compare case-insensitively.
+///
+/// ```
+/// # use warcio::{FieldName, FieldKind};
+/// let id = FieldKind::RecordId;
+/// // Conversion from string via From
+/// let parsed_id: FieldName = "warc-record-id".into();
+///
+/// assert_eq!(id, parsed_id);
+/// // Input was cased differently: standard name has been normalized
+/// assert_eq!("WARC-Record-ID", parsed_id.as_ref());
+/// // Only comparison of FieldNames is case-insensitive, a string is not
+/// assert_eq!(parsed_id, <FieldName as From<_>>::from("wArC-ReCoRd-Id"));
+/// assert_ne!(parsed_id.as_ref(), "wArC-ReCoRd-Id");
+/// ```
+#[derive(Debug, Clone)]
+pub enum FieldName {
+    Known(FieldKind),
     /// Any unrecognized field name.
     ///
     /// The WARC format permits arbitrarily-named extension fields, and specifies that software
@@ -203,7 +227,51 @@ pub enum FieldName {
     Other(Box<str>),
 }
 
-include!(concat!(env!("OUT_DIR"), "/header_field_types.rs"));
+impl AsRef<str> for FieldName {
+    fn as_ref(&self) -> &str {
+        use FieldName::*;
+        match self {
+            Known(x) => x.as_ref(),
+            Other(s) => s.as_ref(),
+        }
+    }
+}
+
+impl<S: AsRef<str> + Into<Box<str>>> From<S> for FieldName {
+    fn from(s: S) -> Self {
+        match <FieldKind as std::convert::TryFrom<&str>>::try_from(s.as_ref()) {
+            Ok(x) => FieldName::Known(x),
+            Err(_) => FieldName::Other(s.into())
+        }
+    }
+}
+
+impl From<FieldKind> for FieldName {
+    fn from(k: FieldKind) -> Self {
+        FieldName::Known(k)
+    }
+}
+
+impl PartialEq<FieldKind> for FieldName {
+    fn eq(&self, other: &FieldKind) -> bool {
+        match self {
+            FieldName::Known(k) => k == other,
+            FieldName::Other(s) => s.as_ref().as_uncased() == other.as_ref(),
+        }
+    }
+}
+
+impl PartialEq<FieldName> for FieldKind {
+    fn eq(&self, other: &FieldName) -> bool {
+        other == self
+    }
+}
+
+pub enum FieldNameRef<'a> {
+    Known(FieldKind),
+    Other(&'a str),
+}
+
 
 impl FieldName {
     /// Returns `true` if a field's value consists of a bare URI.
@@ -219,8 +287,13 @@ impl FieldName {
     /// transformed as necessary when accessing values through a [`Header`] (brackets added when
     /// writing a value to a pre-1.1 record, and removed when reading).
     pub fn value_is_bare_uri(&self) -> bool {
-        use FieldName::*;
-        match self {
+        let kind = match self {
+            Self::Known(kind) => kind,
+            Self::Other(_) => return false,
+        };
+
+        use FieldKind::*;
+        match kind {
             TargetURI | RefersToTargetURI | Profile => true,
             // Types that include angle brackets regardless of WARC version: "<" uri ">"
             RecordId | ConcurrentTo | RefersTo | InfoID | SegmentOriginID => false,
@@ -238,8 +311,6 @@ impl FieldName {
             | IdentifiedPayloadType
             | SegmentNumber
             | SegmentTotalLength => false,
-            // No particular interpretation
-            Other(_) => false,
         }
     }
 }
@@ -258,9 +329,7 @@ impl PartialEq for FieldName {
             (FieldName::Other(_), _) | (_, FieldName::Other(_)) => {
                 self.as_ref().as_uncased().eq(other.as_ref())
             }
-            // If neither operand is Other, we can simply compare the discriminant and avoid
-            // doing a string comparison
-            (l, r) => std::mem::discriminant(l) == std::mem::discriminant(r),
+            (FieldName::Known(l), FieldName::Known(r)) => l == r,
         }
     }
 }
@@ -285,23 +354,9 @@ impl Hash for FieldName {
     }
 }
 
-/// The kind of a single WARC record.
-///
-/// Every record is specified to have a type in its [`WARC-Type`](FieldName::Type) field. This
-/// enumeration provides variants for those specified in the WARC standard and allows representation
-/// of others as might be used by extensions to the core WARC format or future versions.
-///
-/// A `RecordType` can be parsed from a string using the [`From<str>`](#impl-From<S>) impl, and
-/// retrieved as a string via [`AsRef<str>`](#impl-AsRef<str>). Parsed values are case-insensitive
-/// and normalize to the standard capitalization, but [unknown](RecordType::Other) values preserve
-/// case when parsed.
-///
-/// ```
-/// # use warcio::RecordType;
-/// assert_eq!(<RecordType as From<_>>::from("Response").as_ref(), "response");
-/// ```
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum RecordType {
+/// Standardized values for [record types](RecordType).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum RecordKind {
     /// `warcinfo`: describes the records that follow this one.
     ///
     /// An info record describes the records following itself through the end of the current input
@@ -367,6 +422,29 @@ pub enum RecordType {
     /// [`Segment-Origin-ID`](FieldName::SegmentOriginID) and
     /// [`WARC-Segment-Number`](FieldName::SegmentNumber) fields.
     Continuation,
+}
+
+include!(concat!(env!("OUT_DIR"), "/record_kind_conversions.rs"));
+
+/// The kind of a single WARC record.
+///
+/// Every record is specified to have a type in its [`WARC-Type`](FieldName::Type) field. This
+/// enumeration provides variants for those specified in the WARC standard and allows representation
+/// of others as might be used by extensions to the core WARC format or future versions.
+///
+/// A `RecordType` can be parsed from a string using the [`From<str>`](#impl-From<S>) impl, and
+/// retrieved as a string via [`AsRef<str>`](#impl-AsRef<str>). Parsed values are case-insensitive
+/// and normalize to the standard capitalization, but [unknown](RecordType::Other) values preserve
+/// case when parsed.
+///
+/// ```
+/// # use warcio::RecordType;
+/// assert_eq!(<RecordType as From<_>>::from("Response").as_ref(), "response");
+/// ```
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum RecordType {
+    /// A known (standardized) record type.
+    Known(RecordKind),
     /// Any unrecognized record type.
     ///
     /// This variant allows unknown record types to be represented, beyond those specified. Software
@@ -375,7 +453,35 @@ pub enum RecordType {
     Other(Box<str>),
 }
 
-include!(concat!(env!("OUT_DIR"), "/header_record_types.rs"));
+impl AsRef<str> for RecordType {
+    fn as_ref(&self) -> &str {
+        match self {
+            RecordType::Known(x) => x.as_ref(),
+            RecordType::Other(s) => s.as_ref(),
+        }
+    }
+}
+
+impl<S: AsRef<str> + Into<Box<str>>> From<S> for RecordType {
+    fn from(s: S) -> Self {
+        match <RecordKind as std::convert::TryFrom<&str>>::try_from(s.as_ref()) {
+            Ok(x) => RecordType::Known(x),
+            Err(_) => RecordType::Other(s.into())
+        }
+    }
+}
+
+impl From<RecordKind> for RecordType {
+    fn from(k: RecordKind) -> Self {
+        RecordType::Known(k)
+    }
+}
+
+pub enum RecordTypeRef<'a> {
+
+    Other(&'a str),
+}
+
 
 // We use an IndexMap to preserve the read order of fields when writing them back out;
 // std::collections::HashMap randomizes ordering.
@@ -390,7 +496,7 @@ type FieldMap = IndexMap<FieldName, Vec<u8>>;
 /// Self::remove_field).
 ///
 /// ```
-/// # use warcio::{Header, Version, FieldName};
+/// # use warcio::{Header, Version, FieldName, FieldKind};
 /// // Parse a header from bytes
 /// let raw_header = b"\
 /// WARC/1.1\r
@@ -405,11 +511,11 @@ type FieldMap = IndexMap<FieldName, Vec<u8>>;
 ///
 /// // Construct a header from nothing
 /// let mut synthetic_header = Header::new(Version::WARC1_1);
-/// synthetic_header.set_field(FieldName::RecordId,
+/// synthetic_header.set_field(FieldKind::RecordId,
 ///                            "<urn:uuid:b4beb26f-54c4-4277-8e23-51aa9fc4476d>");
-/// synthetic_header.set_field(FieldName::Date, "2021-08-05T06:22Z");
-/// synthetic_header.set_field(FieldName::Type, "resource");
-/// synthetic_header.set_field(FieldName::ContentLength, "0");
+/// synthetic_header.set_field(FieldKind::Date, "2021-08-05T06:22Z");
+/// synthetic_header.set_field(FieldKind::Type, "resource");
+/// synthetic_header.set_field(FieldKind::ContentLength, "0");
 ///
 /// // Headers compare equal because they have the same version and fields
 /// assert_eq!(parsed_header, synthetic_header);
@@ -702,7 +808,7 @@ impl Header {
     /// record ID is specified to be a [RFC 3986](https://dx.doi.org/10.17487/rfc3986) URI,
     /// which are always valid ASCII (and therefore UTF-8) strings when well-formed.
     pub fn record_id(&self) -> &str {
-        self.get_field(FieldName::RecordId)
+        self.get_field(FieldKind::RecordId)
             .expect("record header does not have a WARC-Record-ID")
     }
 
@@ -714,7 +820,7 @@ impl Header {
     /// [`content_length_lenient`](Header::content_length_lenient) or
     /// [`get_field`](Header::get_field) to read as an optional value instead.
     pub fn content_length(&self) -> u64 {
-        self.get_field(FieldName::ContentLength)
+        self.get_field(FieldKind::ContentLength)
             .expect("record header does not have a Content-Length")
             .parse()
             .expect("record Content-Length is not a valid integer")
@@ -726,7 +832,7 @@ impl Header {
     /// case is uninteresting, use [`content_length`](Header::content_length) to panic instead
     /// if the value is missing or invalid.
     pub fn content_length_lenient(&self) -> Option<u64> {
-        self.get_field(FieldName::ContentLength)?.parse().ok()
+        self.get_field(FieldKind::ContentLength)?.parse().ok()
     }
 
     /// Get the [`WARC-Date`](FieldName::Date) field value, parsed as a `DateTime`.
@@ -751,7 +857,7 @@ impl Header {
     /// `WARC-Date` is a mandatory field, so this function panics if it is not present.
     /// If the caller wishes to be lenient, use [`get_field`](Self::get_field) to avoid panicking.
     pub fn warc_date(&self) -> &str {
-        self.get_field(FieldName::Date)
+        self.get_field(FieldKind::Date)
             .expect("record header does not have a WARC-Date field")
     }
 
@@ -776,9 +882,12 @@ impl Header {
     /// Additional types are permitted as core format extensions. Creators of
     /// extensions are encouraged by the standard to discuss their intentions
     /// within the IIPC.
-    // TODO this should return a RecordType instead
+    // TODO this should return a RecordType instead. That will want a RecordTypeRef that borrows
+    // the value and that should impl ToOwned as well as having AsRef and such impls.
+    // alternately: RecordType<S> where S: AsRef<str>. That would push allocation choices to
+    // the user at creation time.
     pub fn warc_type(&self) -> &str {
-        self.get_field(FieldName::Type)
+        self.get_field(FieldKind::Type)
             .expect("record header does not have a WARC-Type field")
     }
 }

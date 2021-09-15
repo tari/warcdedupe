@@ -1,14 +1,14 @@
 use std::io::{Cursor, Read, Write};
 
 use crate::compression::Compression;
-use crate::header::{FieldName, Header};
+use crate::header::{FieldKind, Header};
 use crate::record::Record;
 use crate::version::Version;
 
 #[test]
 fn writes_well_formed_warc1_1() {
     let mut header = Header::new(Version::WARC1_1);
-    header.set_field(FieldName::ContentLength, &b"8"[..]);
+    header.set_field(FieldKind::ContentLength, &b"8"[..]);
 
     let mut write_buf = Vec::new();
     let mut body = header

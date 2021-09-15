@@ -95,7 +95,7 @@ impl Version {
             // No more data, could still be valid
             None => return Err(HeaderParseError::Truncated),
         }
-        let major = bytes_to_u32(&bytes, major_start..major_end)?;
+        let major = bytes_to_u32(bytes, major_start..major_end)?;
 
         // Minor version
         let minor_start = major_end + 1;
@@ -110,7 +110,7 @@ impl Version {
                 ))
             }
         }
-        let minor = bytes_to_u32(&bytes, minor_start..minor_end)?;
+        let minor = bytes_to_u32(bytes, minor_start..minor_end)?;
 
         Ok((minor_end + 2, Version { major, minor }))
     }

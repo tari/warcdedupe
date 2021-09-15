@@ -1,6 +1,6 @@
 [package]
 name = "warcio"
-version = "0.3.0-pre"
+version = "0.4.0-pre"
 authors = ["Peter Marheine <peter@taricorp.net>"]
 edition = "2018"
 

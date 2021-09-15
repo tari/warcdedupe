@@ -42,7 +42,7 @@ pub trait Digester: Sized {
                     // Reached end of record
                     break;
                 }
-                digester.handle_data(&buf);
+                digester.handle_data(buf);
                 buf.len()
             };
             record.consume(n);
