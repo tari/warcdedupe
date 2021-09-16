@@ -13,6 +13,7 @@ use thiserror::Error;
 use crate::compression::{self, Compression};
 use crate::header::get_record_header;
 use crate::{FieldName, Header};
+use crate::header::field_name::FieldStr;
 
 use super::HeaderParseError;
 
@@ -119,12 +120,13 @@ where
 /// Even if the record block is read in its entirety, the entire record is only guaranteed to have
 /// been read from the underlying input stream after `finish` is called.
 #[derive(Debug)]
-pub struct Record<R>
+pub struct Record<R, S>
 where
     R: BufRead,
+    S: FieldStr
 {
     /// The parsed record header.
-    pub header: crate::header::Header,
+    pub header: crate::header::Header<S>,
     /// The record Content-Length in bytes
     content_length: u64,
     /// The number of bytes left to read in the record body
@@ -172,9 +174,10 @@ impl DebugInfo {
 }
 
 /// Read data from the record body.
-impl<R> Read for Record<R>
+impl<R, S> Read for Record<R, S>
 where
     R: BufRead,
+    S: FieldStr
 {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         let constrained = if (buf.len() as u64) > self.bytes_remaining {
@@ -190,9 +193,10 @@ where
 }
 
 /// Read data from the record body, using the underlying input's buffer.
-impl<R> BufRead for Record<R>
+impl<R, S> BufRead for Record<R, S>
 where
     R: BufRead,
+    S: FieldStr
 {
     fn fill_buf(&mut self) -> Result<&[u8], IoError> {
         let buf = self.input.fill_buf()?;
@@ -252,9 +256,10 @@ impl StdError for FinishError {
     }
 }
 
-impl<R> Record<R>
+impl<R, S> Record<R, S>
 where
     R: BufRead,
+    S: FieldStr,
 {
     /// Read a record from an input stream.
     ///
@@ -402,7 +407,7 @@ pub struct RecordWriter<W: Write> {
 }
 
 impl<W: Write> RecordWriter<W> {
-    pub fn new(dest: W, header: &Header, compression: Compression) -> std::io::Result<Self> {
+    pub fn new<S: FieldStr>(dest: W, header: &Header<S>, compression: Compression) -> std::io::Result<Self> {
         let mut dest = compression::Writer::new(dest, compression);
 
         // record header: version followed by fields

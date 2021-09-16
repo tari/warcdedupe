@@ -75,8 +75,8 @@ fn generate_conversions<'a, W: Write, V: Iterator<Item=(&'a str, &'a str)>>(mut 
     type Error = ();
 
     fn try_from(s: &str) -> Result<Self, ()> {{
-        use uncased::AsUncased;
-        static MAP: phf::Map<&'static ::uncased::UncasedStr, {t}> = {m};
+        use uncased::{{UncasedStr, AsUncased}};
+        static MAP: phf::Map<&'static UncasedStr, {t}> = {m};
 
         MAP
             .get(s.as_uncased())
