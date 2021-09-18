@@ -65,7 +65,7 @@ extern crate log;
 use thiserror::Error;
 
 pub use compression::Compression;
-pub use header::{FieldName, FieldKind, Header, RecordType, RecordKind};
+pub use header::{FieldKind, FieldName, Header, RecordKind, RecordType};
 pub use record::Record;
 pub use version::Version;
 
