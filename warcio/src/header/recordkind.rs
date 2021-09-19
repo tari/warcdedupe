@@ -1,4 +1,4 @@
-use uncased::UncasedStr;
+use uncased::{AsUncased, UncasedStr};
 
 /// Standardized values for [record types](crate::RecordType).
 #[derive(Debug, Clone, Copy, PartialOrd, Ord)]
@@ -71,3 +71,11 @@ pub enum RecordKind {
 }
 
 include!(concat!(env!("OUT_DIR"), "/record_kind_conversions.rs"));
+
+impl<S: AsRef<str>> PartialEq<S> for RecordKind {
+    fn eq(&self, other: &S) -> bool {
+        self.as_uncased().eq(other.as_ref())
+    }
+}
+
+impl Eq for RecordKind {}

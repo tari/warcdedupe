@@ -11,7 +11,7 @@ use thiserror::Error;
 use response_log::ResponseLog;
 use warcio::compression::Compression;
 use warcio::record::{Buffer, FinishError, InvalidRecord, Record};
-use warcio::FieldKind;
+use warcio::{FieldKind, RecordKind};
 
 use crate::digest::Digester;
 
@@ -71,7 +71,7 @@ where
         // useful only for responses.
         // TODO: truncated records might have the same payload after truncation as another truncated
         // record but the truncated part might differ. Possibly ignore truncated records.
-        if record.header.get_field(FieldKind::Type) != Some("response") {
+        if record.header.get_field(FieldKind::Type).map_or(false, |t| RecordKind::Response != t) {
             trace!(
                 "Skip non-response record {:?} of type {:?}",
                 record_id,

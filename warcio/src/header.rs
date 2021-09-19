@@ -415,13 +415,10 @@ impl Header {
     /// Additional types are permitted as core format extensions. Creators of
     /// extensions are encouraged by the standard to discuss their intentions
     /// within the IIPC.
-    // TODO this should return a RecordType instead. That will want a RecordTypeRef that borrows
-    // the value and that should impl ToOwned as well as having AsRef and such impls.
-    // alternately: RecordType<S> where S: AsRef<str>. That would push allocation choices to
-    // the user at creation time.
-    pub fn warc_type(&self) -> &str {
+    pub fn warc_type(&self) -> RecordType<&str> {
         self.get_field(FieldKind::Type)
             .expect("record header does not have a WARC-Type field")
+            .into()
     }
 }
 
