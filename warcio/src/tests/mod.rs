@@ -26,14 +26,20 @@ fn header_adjusts_bare_uri_brackets() {
     let mut header = Header::new(Version::WARC1_0);
     header.set_field(FieldKind::TargetURI, "http://example.com");
 
-    assert_eq!(header.get_field(FieldKind::TargetURI), Some("http://example.com"));
+    assert_eq!(
+        header.get_field(FieldKind::TargetURI),
+        Some("http://example.com")
+    );
     assert_eq!(
         header.get_field_bytes_raw(FieldKind::TargetURI),
         Some(&b"<http://example.com>"[..])
     );
 
     header.set_version(Version::WARC1_1);
-    assert_eq!(header.get_field(FieldKind::TargetURI), Some("http://example.com"));
+    assert_eq!(
+        header.get_field(FieldKind::TargetURI),
+        Some("http://example.com")
+    );
     assert_eq!(
         header.get_field_bytes_raw(FieldKind::TargetURI),
         Some(&b"http://example.com"[..])

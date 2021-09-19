@@ -1,8 +1,10 @@
 use crate::RecordKind;
+use std::cmp::Ordering;
+use uncased::AsUncased;
 
 /// The kind of a single WARC record.
 ///
-/// Every record is specified to have a type in its [`WARC-Type`](FieldName::Type) field. This
+/// Every record is specified to have a type in its [`WARC-Type`](crate::FieldKind::Type) field. This
 /// enumeration provides variants for those specified in the WARC standard and allows representation
 /// of others as might be used by extensions to the core WARC format or future versions.
 ///

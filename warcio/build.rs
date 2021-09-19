@@ -35,12 +35,19 @@ fn main() {
         generate_conversions(
             BufWriter::new(File::create(&out_path).expect("failed to create output file")),
             type_name,
-            ini.section(Some("values")).expect("values section missing from ini").iter()
-        ).unwrap_or_else(|_| panic!("Failed to generate conversions from {:?}", ini_path));
+            ini.section(Some("values"))
+                .expect("values section missing from ini")
+                .iter(),
+        )
+        .unwrap_or_else(|_| panic!("Failed to generate conversions from {:?}", ini_path));
     }
 }
 
-fn generate_conversions<'a, W: Write, V: Iterator<Item=(&'a str, &'a str)>>(mut out: W, type_name: &str, variants: V) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_conversions<'a, W: Write, V: Iterator<Item = (&'a str, &'a str)>>(
+    mut out: W,
+    type_name: &str,
+    variants: V,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut map = phf_codegen::Map::<&'static UncasedStr>::new();
 
     writeln!(

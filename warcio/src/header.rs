@@ -12,16 +12,16 @@ pub use recordkind::RecordKind;
 pub use recordtype::RecordType;
 
 use crate::compression::Compression;
-use crate::HeaderParseError;
 use crate::record::RecordWriter;
 use crate::version::Version;
+use crate::HeaderParseError;
 
 use super::{CTL, SEPARATORS};
 
 mod fieldkind;
+mod fieldname;
 mod recordkind;
 mod recordtype;
-mod fieldname;
 
 // We use an IndexMap to preserve the read order of fields when writing them back out;
 // std::collections::HashMap randomizes ordering.
@@ -161,15 +161,7 @@ impl Header {
 
     /// Write the current record to the given output stream.
     ///
-    /// The returned `Write`r will accept only as many bytes as the [`Content-Length`](FieldName::ContentLength)
-    /// header declares and will panic if that field is missing or does not have a valid
-    /// base-10 integer value (consisting only of ASCII digits). Further writes after the
-    /// specified number of bytes will do nothing.
-    ///
-    /// While the output adapter will only write up to the given number of bytes, it will
-    /// not pad the output if dropped before `Content-Length` bytes have been written. Failing
-    /// to write enough data will usually result in data corruption, but an error will also
-    /// be emitted to the log.
+    /// This works equivalently to [`RecordWriter::new`].
     pub fn write_to<W: std::io::Write>(
         &self,
         dest: W,
@@ -214,8 +206,8 @@ impl Header {
 
     /// Get the value of a header field as bytes, without URL translation.
     ///
-    /// This function works like [`get_field_bytes`], except bare URIs are not translated as
-    /// described in that function's documentation.
+    /// This function works like [`get_field_bytes`](Self::get_field_bytes), except bare URIs are
+    /// not translated as described in that function's documentation.
     pub fn get_field_bytes_raw<F: Into<FieldName>>(&self, field: F) -> Option<&[u8]> {
         self.fields.get(&field.into()).map(Vec::as_slice)
     }
@@ -278,19 +270,19 @@ impl Header {
 
     /// Get an iterator over the fields in this header.
     ///
-    /// In comparison to [`get_field_bytes`], the values yielded by this iterator will have the
-    /// raw value to be read or written from a serialized record, including angle brackets
-    /// or not for values which are [bare URIs](FieldName::value_is_bare_uri) based on
-    /// the WARC version.
+    /// In comparison to [`get_field_bytes`](Self::get_field_bytes), the values yielded by this
+    /// iterator will have the raw value to be read or written from a serialized record, including
+    /// angle brackets or not for values which are [bare URIs](FieldName::value_is_bare_uri) based
+    /// on the WARC version.
     pub fn iter_field_bytes(&self) -> impl Iterator<Item = (&FieldName, &[u8])> {
         self.fields.iter().map(|(k, v)| (k, v.as_slice()))
     }
 
     /// Get an iterator over mutable field values.
     ///
-    /// As with [`iter_field_bytes`], the yielded values are not transformed URIs if the field
-    /// is a bare URI like they would be if retrieved by [`get_field_bytes`] or modified with
-    /// [`set_field`].
+    /// As with [`iter_field_bytes`](Self::iter_field_bytes), the yielded values are not transformed
+    /// URIs if the field is a bare URI like they would be if retrieved by
+    /// [`get_field_bytes`](Self::get_field_bytes) or modified with [`set_field`](Self::set_field).
     pub fn iter_field_bytes_mut(&mut self) -> impl Iterator<Item = (&FieldName, &mut Vec<u8>)> {
         self.fields.iter_mut()
     }
@@ -303,30 +295,31 @@ impl Header {
     /// Update the WARC version of this header.
     ///
     /// This will update any bare URIs to account for version differences as described for
-    /// [`set_field`], then set the version to the provided one.
+    /// [`set_field`](Self::set_field), then set the version to the provided one.
     pub fn set_version<V: Into<Version>>(&mut self, version: V) {
         let version = version.into();
-        let transform: Option<fn(&mut Vec<u8>)> = if self.version <= Version::WARC1_0 && version > Version::WARC1_0 {
-            // Upgrading: remove angle brackets if present. Malformed pre-1.1 records might
-            // not have brackets.
-            Some(|v| {
-                if v.starts_with(b"<") && v.ends_with(b">") {
-                    v.pop();
-                    v.remove(0);
-                }
-            })
-        } else if version < Version::WARC1_1 && self.version >= Version::WARC1_1 {
-            // Downgrading: add angle brackets if not present. Malformed post-1.1 records might
-            // already have brackets.
-            Some(|v| {
-                if !(v.starts_with(b"<") && v.ends_with(b">")) {
-                    v.insert(0, b'<');
-                    v.push(b'>');
-                }
-            })
-        } else {
-            None
-        };
+        let transform: Option<fn(&mut Vec<u8>)> =
+            if self.version <= Version::WARC1_0 && version > Version::WARC1_0 {
+                // Upgrading: remove angle brackets if present. Malformed pre-1.1 records might
+                // not have brackets.
+                Some(|v| {
+                    if v.starts_with(b"<") && v.ends_with(b">") {
+                        v.pop();
+                        v.remove(0);
+                    }
+                })
+            } else if version < Version::WARC1_1 && self.version >= Version::WARC1_1 {
+                // Downgrading: add angle brackets if not present. Malformed post-1.1 records might
+                // already have brackets.
+                Some(|v| {
+                    if !(v.starts_with(b"<") && v.ends_with(b">")) {
+                        v.insert(0, b'<');
+                        v.push(b'>');
+                    }
+                })
+            } else {
+                None
+            };
 
         if let Some(transform) = transform {
             for (name, value) in self.iter_field_bytes_mut() {
@@ -338,7 +331,7 @@ impl Header {
         self.version = version;
     }
 
-    /// Get the [`WARC-Record-ID`](FieldName::RecordId) field value.
+    /// Get the [`WARC-Record-ID`](FieldKind::RecordId) field value.
     ///
     /// `WARC-Record-ID` is a mandatory WARC field, so if it is not present this
     /// function will panic. If the caller wishes to be lenient in this situation,
@@ -352,7 +345,7 @@ impl Header {
             .expect("record header does not have a WARC-Record-ID")
     }
 
-    /// Get the record [`Content-Length`](FieldName::ContentLength) or panic.
+    /// Get the record [`Content-Length`](FieldKind::ContentLength) or panic.
     ///
     /// `Content-Length` is a mandatory WARC field, so if it is not present or does not
     /// represent a valid length, this function will panic. If the caller wishes to be
@@ -375,7 +368,7 @@ impl Header {
         self.get_field(FieldKind::ContentLength)?.parse().ok()
     }
 
-    /// Get the [`WARC-Date`](FieldName::Date) field value, parsed as a `DateTime`.
+    /// Get the [`WARC-Date`](FieldKind::Date) field value, parsed as a `DateTime`.
     ///
     /// Equivalent to parsing the result of [`warc_date`] as a datetime in the
     /// format dictated by the WARC specification, and panics if the field is
@@ -392,7 +385,7 @@ impl Header {
             .with_timezone(&Utc)
     }
 
-    /// Get the [`WARC-Date`](FieldName::Date) field value or panic.
+    /// Get the [`WARC-Date`](FieldKind::Date) field value or panic.
     ///
     /// `WARC-Date` is a mandatory field, so this function panics if it is not present.
     /// If the caller wishes to be lenient, use [`get_field`](Self::get_field) to avoid panicking.
@@ -401,7 +394,7 @@ impl Header {
             .expect("record header does not have a WARC-Date field")
     }
 
-    /// Get the [`WARC-Type`](FieldName::Type) field value or panic.
+    /// Get the [`WARC-Type`](FieldKind::Type) field value or panic.
     ///
     /// Because `WARC-Type` is a mandatory field, this function will panic if the
     /// field is not present. Callers should use [`get_field`](Self::get_field) to gracefully handle

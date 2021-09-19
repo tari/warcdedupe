@@ -394,6 +394,14 @@ where
     }
 }
 
+/// A write adapter for emitting records.
+///
+/// A `RecordWriter` will accept bytes written to it, writing them to a contained output, until
+/// enough bytes to match the written record's [`Content-Length`](crate::FieldKind::ContentLength)
+/// have been written. After that, writes will do nothing (succeed, but write 0 bytes).
+///
+/// If dropped before the complete record has been written, no additional data will be written-
+/// usually resulting in a truncated (malformed) record.
 pub struct RecordWriter<W: Write> {
     limit: u64,
     written: u64,

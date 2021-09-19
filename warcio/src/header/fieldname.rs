@@ -1,8 +1,8 @@
 use crate::FieldKind;
 use std::borrow::Borrow;
-use uncased::{UncasedStr, AsUncased};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use uncased::{AsUncased, UncasedStr};
 
 impl From<&FieldKind> for FieldName {
     fn from(kind: &FieldKind) -> FieldName {
@@ -69,7 +69,7 @@ impl<S: AsRef<str> + Into<Box<str>>> From<S> for FieldName {
     fn from(s: S) -> Self {
         match <FieldKind as std::convert::TryFrom<&str>>::try_from(s.as_ref()) {
             Ok(x) => FieldName::Known(x),
-            Err(_) => FieldName::Other(s.into())
+            Err(_) => FieldName::Other(s.into()),
         }
     }
 }
@@ -89,7 +89,6 @@ impl PartialEq<FieldKind> for FieldName {
     }
 }
 
-
 impl FieldName {
     /// Returns `true` if a field's value consists of a bare URI.
     ///
@@ -101,8 +100,8 @@ impl FieldName {
     /// WARC 1.1 record but do in earlier versions, and `false` for all other fields.
     ///
     /// Users will generally not need to use this function directly; field values will be
-    /// transformed as necessary when accessing values through a [`Header`] (brackets added when
-    /// writing a value to a pre-1.1 record, and removed when reading).
+    /// transformed as necessary when accessing values through a [`Header`](crate::Header)
+    /// (brackets added when writing a value to a pre-1.1 record, and removed when reading).
     pub fn value_is_bare_uri(&self) -> bool {
         let kind = match self {
             Self::Known(kind) => kind,

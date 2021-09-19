@@ -1,50 +1,50 @@
 use uncased::UncasedStr;
 
-/// Standardized values for [record types](RecordType).
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+/// Standardized values for [record types](crate::RecordType).
+#[derive(Debug, Clone, Copy, PartialOrd, Ord)]
 pub enum RecordKind {
     /// `warcinfo`: describes the records that follow this one.
     ///
     /// An info record describes the records following itself through the end of the current input
-    /// or until the next info record. Its [`Content-Type`](FieldName::ContentType) is recommended
+    /// or until the next info record. Its [`Content-Type`](crate::FieldKind::ContentType) is recommended
     /// to be `application/warc-fields`, and the standard suggests that it contain information about
     /// the tools that wrote the WARC file such as tool operator, software version and IP address.
     Info,
     /// `response`: a complete scheme-specific response to some request.
     ///
     /// The exact contents of a response depend on the URI scheme of the record's
-    /// [target URI](FieldName::TargetURI); the WARC 1.1 specification only defines a format for the
+    /// [target URI](crate::FieldKind::TargetURI); the WARC 1.1 specification only defines a format for the
     /// http and https schemes, with a `response` record containing a full HTTP response
     /// (including headers) received over the network.
     Response,
     /// `resource`: a resource without full protocol response information.
     ///
-    /// While a [`response`](RecordType::Response) record contains a full response as it appears on
+    /// While a [`response`](RecordKind::Response) record contains a full response as it appears on
     /// the network, a `resource` record discards protocol information- however the exact contents
-    /// of the record block still depend on the scheme of the [target URI](FieldName::TargetURI).
+    /// of the record block still depend on the scheme of the [target URI](crate::FieldKind::TargetURI).
     /// WARC 1.1 specifies meanings for the `http`, `https`, `ftp`, and `dns` schemes.
     Resource,
     /// `request`: a complete scheme-specific request.
     ///
     /// A request record includes a complete request including network protocol information in the
-    /// same way that a [`response`](RecordType::Response) record does, including dependence on the
+    /// same way that a [`response`](RecordKind::Response) record does, including dependence on the
     /// target URI scheme.
     Request,
     /// `metadata`: content created to further describe, explain or accompany a resource.
     ///
     /// Metadata fields usually refer to another record of some other type that contains original
     /// content that was harvested or transformed. It is suggested that the record block have the
-    /// `application/warc-fields` [content type](FieldName::ContentType) and may have fields
+    /// `application/warc-fields` [content type](crate::FieldKind::ContentType) and may have fields
     /// including `via`, `hopsFromSeed`, and `fetchTimeMs`.
     Metadata,
     /// `revisit`: revisitation of content that was already archived.
     ///
-    /// A revisit record is typically used instead of a [response](RecordType::Response) or
-    /// [resource](RecordType::Resource) record to indicate that the received content was a complete
+    /// A revisit record is typically used instead of a [response](crate::RecordKind::Response) or
+    /// [resource](crate::RecordKind::Resource) record to indicate that the received content was a complete
     /// or substantial duplicate of material that was previously archived, allowing reduced storage
     /// size or improved cross-referencing of material.
     ///
-    /// Revisit records *shall* have a [`WARC-Profile`](FieldName::Profile) field describing how
+    /// Revisit records *shall* have a [`WARC-Profile`](crate::FieldKind::Profile) field describing how
     /// the fields and block should be interpreted. WARC 1.1 defines two profiles, each indicated
     /// by a particular URI:
     ///  * identical payload digest: a strong hash function indicates the payload is identical to
@@ -65,8 +65,8 @@ pub enum RecordKind {
     ///
     /// Continuation records are used when records are segmented, allowing large blocks to be split
     /// into multiple records (and also multiple files). Continuations *shall* always have
-    /// [`Segment-Origin-ID`](FieldName::SegmentOriginID) and
-    /// [`WARC-Segment-Number`](FieldName::SegmentNumber) fields.
+    /// [`Segment-Origin-ID`](crate::FieldKind::SegmentOriginID) and
+    /// [`WARC-Segment-Number`](crate::FieldKind::SegmentNumber) fields.
     Continuation,
 }
 

@@ -25,7 +25,7 @@ pub enum FieldKind {
     ///
     /// This field is mandatory and must be present in a standards-compliant record.
     Date,
-    /// `WARC-Type`: the type of a record, corresponding to a [`RecordType`].
+    /// `WARC-Type`: the type of a record, corresponding to a [`RecordType`](crate::RecordType).
     ///
     /// This field is mandatory and must be present in a standards-compliant record.
     Type,
@@ -35,12 +35,12 @@ pub enum FieldKind {
     /// If absent, readers may attempt to identify the resource type by inspecting
     /// its contents and URI, or otherwise treat it as `application/octet-stream`.
     ContentType,
-    /// `WARC-Concurrent-To`: the [`RecordId`](Self::RecordId) of any records created as part of the same
-    /// capture event as a record.
+    /// `WARC-Concurrent-To`: the [`RecordId`](Self::RecordId) of any records created as part of
+    /// the same capture event as a record.
     ///
     /// A capture event includes all information automatically gathered by a retrieval of a single
-    /// [`TargetURI`](Self::TargetURI), such as a [`Request`](RecordType::Request) record and its
-    /// associated [`Response`](RecordType::Response).
+    /// [`TargetURI`](Self::TargetURI), such as a [`Request`](crate::RecordKind::Request) record
+    /// and its associated [`Response`](crate::RecordKind::Response).
     ///
     /// This field may appear multiple times on a single record, but due to API limitations
     /// this library does not currently support that.
@@ -56,15 +56,15 @@ pub enum FieldKind {
     /// string `sha1:3EF4GH5IJ6KL7MN8OPQAB2CD`; many tools adopt this same format.
     BlockDigest,
     /// `WARC-Payload-Digest`: a `labelled-digest` of a record's payload, in the same format as a
-    /// [`BlockDigest`](FieldName::BlockDigest) value.
+    /// [`BlockDigest`](crate::FieldKind::BlockDigest) value.
     ///
     /// The payload of a record is not necessarily equivalent to the record block. In particular,
-    /// the payload of a block with [`ContentType`](FieldName::ContentType) `application/http` is the
+    /// the payload of a block with [`ContentType`](FieldKind::ContentType) `application/http` is the
     /// [RFC 2616](https://dx.doi.org/10.17487/rfc2616) `entity-body`; the HTTP request or response
     /// body, excluding any headers.
     ///
     /// The payload digest of a record may also refer to data that is not present in the record
-    /// block at all, such as when a [`Revisit`](RecordType::Revisit) record truncates duplicated
+    /// block at all, such as when a [`Revisit`](crate::RecordKind::Revisit) record truncates duplicated
     /// data or in a segmented record.
     PayloadDigest,
     /// `WARC-IP-Address`: an IP address that was contacted to retrieve record content.
@@ -81,10 +81,10 @@ pub enum FieldKind {
     ///
     /// The field value is a URI surrounded by angle brackets: `<uri>`.
     ///
-    /// [`Revisit`](RecordType::Revisit) or [`Conversion`](RecordType::Conversion) records use this
-    /// field to indicate a preceding record which helps determine the record's content. It can also
-    /// be used to associate a [`Metadata`](RecordType::Metadata) record with the record it
-    /// describes.
+    /// [`Revisit`](crate::RecordKind::Revisit) or [`Conversion`](crate::RecordKind::Conversion)
+    /// records use this field to indicate a preceding record which helps determine the record's
+    /// content. It can also be used to associate a [`Metadata`](crate::RecordKind::Metadata)
+    /// record with the record it describes.
     RefersTo,
     /// `WARC-Refers-To-Target-URI`: the [`TargetURI`](Self::TargetURI) of the record referred to by
     /// [`RefersTo`](Self::RefersTo).
@@ -95,8 +95,8 @@ pub enum FieldKind {
     /// `WARC-Target-URI`: the original URI that provided the record content.
     ///
     /// In the context of web crawling, this is the URI that a crawler sent a request to retrieve.
-    /// For indirect records such as [metadata](RecordType::Metadata) or
-    /// [conversion](RecordType::Conversion)s, the value is a copy of the target URI from the
+    /// For indirect records such as [metadata](crate::RecordKind::Metadata) or
+    /// [conversion](crate::RecordKind::Conversion)s, the value is a copy of the target URI from the
     /// original record.
     TargetURI,
     /// `WARC-Truncated`: the reason that a record contains a truncated version of the
@@ -109,20 +109,20 @@ pub enum FieldKind {
     ///  * `disconnect`: the resource was disconnected from a network
     ///  * `unspecified`: some other or unknown reason
     Truncated,
-    /// `WARC-Warcinfo-ID`: the [ID](Self::RecordId) of the [warcinfo](RecordType::Info) record
-    /// associated with this record.
+    /// `WARC-Warcinfo-ID`: the [ID](Self::RecordId) of the [warcinfo](crate::RecordKind::Info)
+    /// record associated with this record.
     ///
     /// This field is typically used when the context of a record is lost, such as when a collection
     /// of records is split into individual files. The value is a URI surrounded by angle brackets:
     /// `<uri>`.
     InfoID,
     /// `WARC-Filename`: the name of the file containing the current
-    /// [warcinfo](RecordType::Info) record.
+    /// [warcinfo](crate::RecordKind::Info) record.
     ///
     /// This field may only be used in info records.
     Filename,
     /// `WARC-Profile`: the kind of analysis and handling applied to create a
-    /// [revisit](RecordType::Revisit) record, specified as a URI.
+    /// [revisit](crate::RecordKind::Revisit) record, specified as a URI.
     ///
     /// Readers shall not attempt to interpret records for which the profile is not recognized. The
     /// WARC 1.1 standard defines two profiles and allows for others:
@@ -137,20 +137,20 @@ pub enum FieldKind {
     IdentifiedPayloadType,
     /// `WARC-Segment-Number`: the current record's ordering in a sequence of segmented records.
     ///
-    /// This field is required for [continuation](RecordType::Continuation) records as well as for
+    /// This field is required for [continuation](crate::RecordKind::Continuation) records as well as for
     /// any record that has associated continuations. In the first record its value is `1`, and
     /// for subsequent continuations the value is incremented.
     SegmentNumber,
     /// `WARC-Segment-Origin-ID`: the ID of the starting record in a series of segmented records.
     ///
-    /// This field if required for [continuation](RecordType::Continuation) records with the value
-    /// being a URI surrounded by angle brackets, where the URI is the
+    /// This field if required for [continuation](crate::RecordKind::Continuation) records with the
+    /// value being a URI surrounded by angle brackets, where the URI is the
     /// [ID of the first record](Self::RecordId) in the continuation sequence.
     SegmentOriginID,
     /// `WARC-Segment-Total-Length`: the total length of concatenated segmented content blocks.
     ///
-    /// This field is required for the last [continuation](RecordType::Continuation) record of a
-    /// series, and *shall not* be used elsewhere.
+    /// This field is required for the last [continuation](crate::RecordKind::Continuation) record
+    /// of a series, and *shall not* be used elsewhere.
     SegmentTotalLength,
 }
 
