@@ -274,6 +274,10 @@ where
         Ok(true)
     }
 
+    /// Read a stream of records, deduplicating and writing to the output until end of input.
+    ///
+    /// Returns a pair of the number of records copied, and the number of records deduplicated.
+    /// The sum of these is the total number of records read.
     pub fn read_stream<R: BufRead + Seek>(
         &mut self,
         mut input: R,
@@ -282,6 +286,7 @@ where
         let mut n_copied = 0;
         let mut n_deduped = 0;
 
+        // TODO replace with a RecordReader
         while !input.fill_buf()?.is_empty() {
             let deduped = self.read_record(&mut input, compression)?;
             if deduped {

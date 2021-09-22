@@ -463,3 +463,25 @@ impl<W: Write> Drop for RecordWriter<W> {
         }
     }
 }
+
+pub struct RecordReader<R> where R: BufRead {
+    input: R,
+    compression: Compression,
+}
+
+impl<R: BufRead> RecordReader<R> {
+    pub fn new(input: R, compression: Compression) -> Self {
+        RecordReader {
+            input,
+            compression
+        }
+    }
+
+    pub fn next(&mut self) -> Option<Result<Record<&mut R>, InvalidRecord>> {
+        if self.input.fill_buf().map_or(false, |b| b.is_empty()) {
+            None
+        } else {
+            Some(Record::read_from(&mut self.input, self.compression))
+        }
+    }
+}
