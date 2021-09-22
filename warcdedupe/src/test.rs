@@ -114,7 +114,6 @@ fn copies_ineligible() {
     let mut out = Vec::<u8>::new();
     let mut deduplicator =
         Deduplicator::<IneligibleDigester, _, _>::new(&mut out, AlwaysSeen, Compression::None);
-    // TODO "failed to fill whole buffer" is a read_exact error from record::finish_internal
     let deduplicated = deduplicator
         .read_record(Cursor::new(HTTP_RECORD.as_bytes()), Compression::None)
         .expect("should read record okay");

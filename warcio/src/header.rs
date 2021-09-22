@@ -37,6 +37,7 @@ type FieldMap = IndexMap<FieldName, Vec<u8>>;
 ///
 /// ```
 /// # use warcio::{Header, Version, FieldName, FieldKind};
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// // Parse a header from bytes
 /// let raw_header = b"\
 /// WARC/1.1\r
@@ -46,7 +47,7 @@ type FieldMap = IndexMap<FieldName, Vec<u8>>;
 /// Content-Length: 0\r
 /// \r
 /// ";
-/// let (parsed_header, parsed_size) = Header::parse(raw_header).unwrap();
+/// let (parsed_header, parsed_size) = Header::parse(raw_header)?;
 /// assert_eq!(parsed_size, raw_header.len());
 ///
 /// // Construct a header from nothing
@@ -59,6 +60,8 @@ type FieldMap = IndexMap<FieldName, Vec<u8>>;
 ///
 /// // Headers compare equal because they have the same version and fields
 /// assert_eq!(parsed_header, synthetic_header);
+/// #     Ok(())
+/// # }
 /// ```
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Header {

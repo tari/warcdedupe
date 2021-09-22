@@ -3,6 +3,13 @@ name = "warcdedupe"
 version = "0.3.0-pre"
 edition = "2018"
 
+description = "A library and tool for deduplicating WARC records"
+repository = "https://gitlab.com/taricorp/warcdedupe"
+license = "BSD-3-Clause"
+
+categories = ["compression", "science"]
+keywords = ["warc", "revisit", "deduplicate"]
+
 [[bin]]
 name = "warcdedupe"
 

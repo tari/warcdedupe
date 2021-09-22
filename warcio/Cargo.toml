@@ -8,8 +8,8 @@ description = "A library for reading and writing WARC files"
 repository = "https://gitlab.com/taricorp/warcdedupe"
 license = "BSD-3-Clause"
 
-categories = ["science"]
-keywords = ["warc", "revisit", "deduplicate"]
+categories = ["parsing", "science"]
+keywords = ["warc", "archive"]
 
 [dependencies]
 buf_redux = "0.8.4"
