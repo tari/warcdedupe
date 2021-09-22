@@ -1,53 +1,19 @@
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate serde_derive;
 
+use clap::{app_from_crate, crate_authors, crate_description, crate_name, crate_version, Arg};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Cursor, Write};
-use std::path::PathBuf;
 
-use docopt::Docopt;
 use warcio::compression::Compression;
 
+use std::ffi::OsStr;
 use warcdedupe::digest::LengthSha1Digester;
 use warcdedupe::response_log::InMemoryResponseLog;
 use warcdedupe::{Deduplicator, ProcessError};
 
-const USAGE: &str = "
-WARC deduplicator.
-
-Usage:
-  warcdedupe [options] <infile> [<outfile>]
-
-If outfile is not specified or is '-', it will be written to standard output.
-
-Options:
-  -h --help             Show this help.
-  --compress-output     Write compressed records to non-file output.
-  --disable-mmap        Never memory-map the input file, even if possible.
-  --disable-progress    Do not display progress, even to a terminal.
-
-When output is a file, the --compress-output option is ignored. Input and
-output files are assumed to be compressed if the file name ends in '.gz'.
-";
-
-#[derive(Debug, Deserialize)]
-struct Args {
-    arg_infile: PathBuf,
-    arg_outfile: Option<PathBuf>,
-    flag_compress_output: bool,
-    flag_disable_mmap: bool,
-    flag_disable_progress: bool,
-}
-
-/// Transform "-" into None to use stdio instead of a file.
-fn maybe_file(o: Option<PathBuf>) -> Option<PathBuf> {
-    o.and_then(|p| if p.as_os_str() == "-" { None } else { Some(p) })
-}
-
-fn open_output_stream(p: Option<PathBuf>) -> Box<dyn Write> {
-    if let Some(p) = maybe_file(p) {
+fn open_output_stream(p: Option<&OsStr>) -> Box<dyn Write> {
+    if let Some(p) = p {
         Box::new(BufWriter::new(
             File::create(&p).expect("Failed to create output file"),
         ))
@@ -63,22 +29,41 @@ fn open_output_stream(p: Option<PathBuf>) -> Box<dyn Write> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     pretty_env_logger::init_custom_env("WARCDEDUPE_LOG");
 
-    let args: Args = Docopt::new(USAGE)
-        .and_then(|d| d.deserialize())
-        .unwrap_or_else(|e| e.exit());
+    let matches = app_from_crate!()
+        .arg(Arg::with_name("compress-output")
+            .long("compress-output")
+            .help("Write compressed records to non-file output"))
+        .arg(Arg::with_name("disable-mmap")
+            .long("disable-mmap")
+            .help("Never memory-map the input, even if possible"))
+        .arg(Arg::with_name("disable-progress")
+            .long("disable-progress")
+            .help("Do not display progress, even to a terminal"))
+        .arg(Arg::with_name("infile")
+            .required(true)
+            .help("Name of file to read"))
+        .arg(Arg::with_name("outfile")
+            .required(false)
+            .help("Name of file to write, stdout if omitted or '-'"))
+        .after_help("When output is a file, compression options are ignored. Input and output \n\
+                          output files are assumed to be compressed if the file name ends in '.gz'.")
+        .get_matches();
 
-    let input_compression = Compression::guess_for_filename(&args.arg_infile);
-    let input_file = std::fs::File::open(args.arg_infile)?;
-    let default_output_compression = if args.flag_compress_output {
+    let infile_path = matches.value_of_os("infile").unwrap();
+    let input_compression = Compression::guess_for_filename(infile_path);
+    let input_file = std::fs::File::open(infile_path)?;
+
+    let outfile_path = matches.value_of_os("outfile").filter(|&p| p != "-");
+    let default_output_compression = if matches.is_present("compress-output") {
         Compression::Gzip
     } else {
         Compression::None
     };
-    let output_compression = args
-        .arg_outfile
-        .as_ref()
-        .map_or(default_output_compression, Compression::guess_for_filename);
-    let output = open_output_stream(args.arg_outfile);
+    let output_compression = match outfile_path {
+        None => default_output_compression,
+        Some(p) => Compression::guess_for_filename(p),
+    };
+    let output = open_output_stream(outfile_path);
 
     let deduplicator = Deduplicator::<LengthSha1Digester, _, _>::new(
         output,
@@ -86,9 +71,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         output_compression,
     );
 
-    let (n_copied, n_deduped) = if args.flag_disable_mmap {
+    let enable_progress = matches.is_present("disable-progress");
+    let (n_copied, n_deduped) = if matches.is_present("disable-mmap") {
         run_with_progress(
-            !args.flag_disable_progress,
+            enable_progress,
             deduplicator,
             BufReader::with_capacity(1 << 20, input_file),
             input_compression,
@@ -100,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let map = unsafe { SequentialMmap::of_file(&input_file)? };
 
         run_with_progress(
-            !args.flag_disable_progress,
+            enable_progress,
             deduplicator,
             Cursor::new(&map),
             input_compression,

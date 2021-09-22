@@ -1,6 +1,6 @@
 [package]
 name = "warcdedupe"
-version = "0.2.0-pre"
+version = "0.3.0-pre"
 edition = "2018"
 
 [[bin]]
@@ -22,9 +22,7 @@ sha-1 = "0.9.7"
 thiserror = "1.0"
 
 # Command line handling
-docopt = "1.1.1"
-serde = "1.0.33"
-serde_derive = "1.0.33"
+clap = "2.33"
 
 # Binary driver
 nix = "0.22.0"
