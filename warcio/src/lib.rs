@@ -71,6 +71,7 @@ pub use version::Version;
 
 pub mod compression;
 mod header;
+pub mod index;
 pub mod record;
 #[cfg(test)]
 mod tests;

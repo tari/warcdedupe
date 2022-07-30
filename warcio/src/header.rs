@@ -226,6 +226,7 @@ impl Header {
     /// access values that are not acceptable Rust strings (that is, they are not valid UTF-8).
     /// However, because such a value would be malformed according to the specification, it should
     /// rarely be required.
+    // TODO just field()? https://rust-lang.github.io/api-guidelines/naming.html#getter-names-follow-rust-convention-c-getter
     pub fn get_field<F: Into<FieldName>>(&self, field: F) -> Option<&str> {
         str::from_utf8(self.get_field_bytes(field)?).ok()
     }
