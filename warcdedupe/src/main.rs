@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         output_compression,
     );
 
-    let enable_progress = matches.is_present("disable-progress");
+    let enable_progress = !matches.is_present("disable-progress");
     let (n_copied, n_deduped) = if matches.is_present("disable-mmap") {
         run_with_progress(
             enable_progress,
