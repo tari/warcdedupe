@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 
-use clap::{app_from_crate, crate_authors, crate_description, crate_name, crate_version, Arg};
+use clap::{command, Arg};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Cursor, Write};
 
@@ -29,7 +29,7 @@ fn open_output_stream(p: Option<&OsStr>) -> Box<dyn Write> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     pretty_env_logger::init_custom_env("WARCDEDUPE_LOG");
 
-    let matches = app_from_crate!()
+    let matches = command!()
         .arg(Arg::with_name("compress-output")
             .long("compress-output")
             .help("Write compressed records to non-file output"))
@@ -41,9 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .help("Do not display progress, even to a terminal"))
         .arg(Arg::with_name("infile")
             .required(true)
+            .allow_invalid_utf8(true)
             .help("Name of file to read"))
         .arg(Arg::with_name("outfile")
             .required(false)
+            .allow_invalid_utf8(true)
             .help("Name of file to write, stdout if omitted or '-'"))
         .after_help("When output is a file, compression options are ignored. Input and output \n\
                           output files are assumed to be compressed if the file name ends in '.gz'.")
@@ -126,9 +128,8 @@ where
         let progress = indicatif::ProgressBar::new(input_len).with_style(
             indicatif::ProgressStyle::default_bar().template(
                 "[{elapsed} ETA {eta}] {wide_bar} [{bytes}/{total_bytes} ({bytes_per_sec})]",
-            ),
+            ).unwrap(),
         );
-        progress.set_draw_rate(1);
 
         let out = deduplicator.read_stream(progress.wrap_read(input), input_compression);
         progress.finish();
